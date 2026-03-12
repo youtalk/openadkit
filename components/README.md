@@ -10,7 +10,7 @@ Detailed instructions on how to deploy the components can be found in the [Open 
 block-beta
     columns 7
 
-    space:2 ROS["ros:humble-ros-base-jammy"]:3 space:2
+    space:2 ROS["ros:humble-ros-base-jammy<br/>ros:jazzy-ros-base-noble"]:3 space:2
 
     space:7
 
