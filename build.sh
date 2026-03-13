@@ -87,12 +87,15 @@ clone_repositories() {
 		git clone https://github.com/autowarefoundation/autoware.git autoware
 	fi
 
+	local repos_file="${AUTOWARE_REPOS_FILE:-autoware/repositories/autoware.repos}"
+	echo "Using repos file: $repos_file"
+
 	if [ ! -d "autoware/src" ]; then
 		mkdir -p autoware/src
-		vcs import autoware/src <autoware/repositories/autoware.repos
+		vcs import autoware/src <"$repos_file"
 	else
 		echo "Source directory already exists. Updating repositories..."
-		vcs import autoware/src <autoware/repositories/autoware.repos
+		vcs import autoware/src <"$repos_file"
 		vcs pull autoware/src
 	fi
 }

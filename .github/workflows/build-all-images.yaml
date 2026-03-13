@@ -21,6 +21,9 @@ env:
   IMAGE_PREFIX_COMMON: ghcr.io/${{ github.repository_owner }}/openadkit-common
   IMAGE_PREFIX_COMPONENT: ghcr.io/${{ github.repository_owner }}/openadkit
   BAKE_FILE: components/docker-bake.hcl
+  # Default upstream repos file. CI jobs override this via per-job env below.
+  # To revert to upstream, remove the per-job AUTOWARE_REPOS_FILE overrides.
+  AUTOWARE_REPOS_FILE: autoware/repositories/autoware.repos
 
 jobs:
   # =============================================================================
@@ -31,6 +34,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      AUTOWARE_REPOS_FILE: repos/autoware-ci.repos
     strategy:
       fail-fast: false
       max-parallel: 8
@@ -59,7 +64,7 @@ jobs:
       - name: Pull Autoware Source
         run: |
             mkdir -p autoware/src
-            vcs import --shallow autoware/src < autoware/repositories/autoware.repos
+            vcs import --shallow autoware/src < "${AUTOWARE_REPOS_FILE}"
         shell: bash
 
       - name: Set up Docker Buildx
@@ -171,6 +176,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      AUTOWARE_REPOS_FILE: repos/autoware-ci.repos
     strategy:
       fail-fast: false
       max-parallel: 8
@@ -215,7 +222,7 @@ jobs:
       - name: Pull Autoware Source
         run: |
             mkdir -p autoware/src
-            vcs import --shallow autoware/src < autoware/repositories/autoware.repos
+            vcs import --shallow autoware/src < "${AUTOWARE_REPOS_FILE}"
         shell: bash
 
       - name: Set up Docker Buildx
@@ -272,6 +279,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    env:
+      AUTOWARE_REPOS_FILE: repos/autoware-ci.repos
     strategy:
       fail-fast: false
       max-parallel: 8
@@ -309,7 +318,7 @@ jobs:
       - name: Pull Autoware Source
         run: |
             mkdir -p autoware/src
-            vcs import --shallow autoware/src < autoware/repositories/autoware.repos
+            vcs import --shallow autoware/src < "${AUTOWARE_REPOS_FILE}"
         shell: bash
 
       - name: Set up Docker Buildx
