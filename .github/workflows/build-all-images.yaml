@@ -34,8 +34,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    env:
-      AUTOWARE_REPOS_FILE: repos/autoware-ci.repos
     strategy:
       fail-fast: false
       max-parallel: 8
@@ -176,8 +174,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    env:
-      AUTOWARE_REPOS_FILE: repos/autoware-ci.repos
     strategy:
       fail-fast: false
       max-parallel: 8
@@ -279,8 +275,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-    env:
-      AUTOWARE_REPOS_FILE: repos/autoware-ci.repos
     strategy:
       fail-fast: false
       max-parallel: 8
