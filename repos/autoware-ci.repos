@@ -32,7 +32,7 @@ repositories:
   core/autoware_core:
     type: git
     url: https://github.com/esteve/autoware_core.git
-    version: fix-warning-arm64-jazzy-1.5.0
+    version: fix-warning-arm64-jazzy
   core/autoware_rviz_plugins:
     type: git
     url: https://github.com/autowarefoundation/autoware_rviz_plugins.git
