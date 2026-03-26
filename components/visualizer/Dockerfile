@@ -53,7 +53,8 @@ RUN --mount=type=ssh \
   websockify \
   python3-numpy \
   python3-xdg \
-  && pip install --no-cache-dir yamale xmlschema \
+  pipx \
+  && pipx install yamale xmlschema \
   && /scripts/cleanup_apt.sh true \
   && /scripts/cleanup_system.sh $ROS_DISTRO
 

@@ -43,10 +43,11 @@ COPY --from=builder /rosdep-simulator-exec-depend-packages.txt /tmp/rosdep-simul
 RUN --mount=type=ssh \
     --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get update \
+    && apt-get install -y pipx \
     # Remove xmlschema and yamale from rosdep packages since we install via pip
     && sed -i '/\(xmlschema\|yamale\)/d' /tmp/rosdep-simulator-exec-depend-packages.txt \
-    && pip3 install --no-cache-dir yamale \
-    && pip3 install --no-cache-dir xmlschema==3.4.5 \
+    && pipx install yamale \
+    && pipx install xmlschema==3.4.5 \
     && cat /tmp/rosdep-simulator-exec-depend-packages.txt | xargs apt-get install -y --no-install-recommends \
     && /autoware/cleanup_system.sh $ROS_DISTRO
 

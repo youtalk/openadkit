@@ -43,8 +43,8 @@ jobs:
       - name: Install jq and vcs2l
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq python3-pip
-          pip install --no-cache-dir vcs2l
+          sudo apt-get install -y jq pipx
+          pipx install vcs2l
         shell: bash
 
       - name: Checkout OpenADKit repository
@@ -199,8 +199,8 @@ jobs:
       - name: Install jq and vcs2l
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq python3-pip
-          pip install --no-cache-dir vcs2l
+          sudo apt-get install -y jq pipx
+          pipx install vcs2l
         shell: bash
 
       - name: Checkout OpenADKit repository
@@ -288,8 +288,8 @@ jobs:
       - name: Install jq and vcs2l
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq python3-pip
-          pip install --no-cache-dir vcs2l
+          sudo apt-get install -y jq pipx
+          pipx install vcs2l
         shell: bash
 
       - name: Checkout OpenADKit repository
