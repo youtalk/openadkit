@@ -54,7 +54,8 @@ RUN --mount=type=ssh \
   python3-numpy \
   python3-xdg \
   pipx \
-  && pipx install yamale xmlschema \
+  && pipx install yamale \
+  && pipx install xmlschema \
   && /scripts/cleanup_apt.sh true \
   && /scripts/cleanup_system.sh $ROS_DISTRO
 
