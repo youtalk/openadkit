@@ -285,6 +285,9 @@ jobs:
             ros-distro: jazzy
             target: universe-cuda
     steps:
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+
       - name: Install jq and vcs2l
         run: |
           sudo apt-get update
