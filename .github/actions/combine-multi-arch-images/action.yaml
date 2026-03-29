@@ -3,7 +3,10 @@ description: Combine platform-specific Docker images into multi-arch manifests
 
 inputs:
   ros-distro:
-    description: ROS distribution (humble or jazzy)
+    description: ROS distribution name
+    required: true
+  date:
+    description: Build date stamp (YYYYMMDD)
     required: true
   registry:
     description: Container registry
@@ -14,8 +17,11 @@ inputs:
   image-prefix-component:
     description: Image prefix for component images
     required: true
+  component-targets:
+    description: 'Space-separated list of component and universe image targets (e.g., "sensing-perception localization-mapping universe")'
+    required: true
   token:
-    description: GitHub token for API access
+    description: GitHub token for registry access
     required: true
 
 runs:
@@ -28,71 +34,35 @@ runs:
         username: ${{ github.actor }}
         password: ${{ inputs.token }}
 
-    - name: Install jq
-      run: sudo apt-get update && sudo apt-get install -y jq
-      shell: bash
-
     - name: Combine multi-arch images for common packages
       run: |
         set -e
 
-        # Function to get all tags for a package
-        get_package_tags() {
-          local package_name=$1
-          local page=1
-          local per_page=100
-          local all_tags=()
+        IMAGE="${{ inputs.image-prefix-common }}"
+        DISTRO="${{ inputs.ros-distro }}"
+        DATE="${{ inputs.date }}"
 
-          while true; do
-            response=$(curl -s -H "Authorization: Bearer ${{ inputs.token }}" \
-              "https://api.github.com/orgs/${{ github.repository_owner }}/packages/container/${package_name}/versions?per_page=${per_page}&page=${page}")
+        # Known common image variants
+        MULTI_ARCH_VARIANTS="base devel"
+        CUDA_VARIANTS="base-cuda devel-cuda"
 
-            tags=$(echo "$response" | jq -r '.[].metadata.container.tags[]?' 2>/dev/null || echo "")
+        # Create multi-arch manifests (amd64 + arm64)
+        for variant in ${MULTI_ARCH_VARIANTS}; do
+          base_tag="${variant}-${DISTRO}-${DATE}"
+          echo "Creating multi-arch manifest for ${IMAGE}:${base_tag}"
+          docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
+            "${IMAGE}:${variant}-amd64-${DISTRO}-${DATE}" \
+            "${IMAGE}:${variant}-arm64-${DISTRO}-${DATE}"
+          echo "Created ${IMAGE}:${base_tag}"
+        done
 
-            if [ -z "$tags" ]; then
-              break
-            fi
-
-            all_tags+=($tags)
-            page=$((page + 1))
-          done
-
-          echo "${all_tags[@]}"
-        }
-
-        # Function to create multi-arch manifest
-        create_manifest() {
-          local image_name=$1
-          local base_tag=$2
-
-          echo "Creating multi-arch manifest for ${image_name}:${base_tag}"
-
-          if docker buildx imagetools inspect "${image_name}:${base_tag}-amd64" >/dev/null 2>&1 && \
-             docker buildx imagetools inspect "${image_name}:${base_tag}-arm64" >/dev/null 2>&1; then
-            docker buildx imagetools create -t "${image_name}:${base_tag}" \
-              "${image_name}:${base_tag}-amd64" \
-              "${image_name}:${base_tag}-arm64"
-            echo "✓ Created ${image_name}:${base_tag}"
-          else
-            echo "⚠ Skipping ${base_tag}: not all architectures available"
-          fi
-        }
-
-        # Get package name from image prefix
-        package_name=$(echo "${{ inputs.image-prefix-common }}" | sed 's|.*/||')
-
-        echo "Fetching tags for package: ${package_name}"
-        all_tags=$(get_package_tags "${package_name}")
-
-        # Find base tags (without -amd64/-arm64 suffix)
-        base_tags=$(echo "${all_tags}" | tr ' ' '\n' | grep -E '.*-amd64$' | sed 's/-amd64$//' | sort -u)
-
-        # Create manifests for common images
-        for base_tag in $base_tags; do
-          # Only process tags for this ROS distro
-          if echo "$base_tag" | grep -q "${{ inputs.ros-distro }}"; then
-            create_manifest "${{ inputs.image-prefix-common }}" "$base_tag"
-          fi
+        # Create single-arch aliases for CUDA (amd64-only)
+        for variant in ${CUDA_VARIANTS}; do
+          base_tag="${variant}-${DISTRO}-${DATE}"
+          echo "Creating single-arch manifest for ${IMAGE}:${base_tag}"
+          docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
+            "${IMAGE}:${variant}-amd64-${DISTRO}-${DATE}"
+          echo "Created ${IMAGE}:${base_tag}"
         done
       shell: bash
 
@@ -100,62 +70,27 @@ runs:
       run: |
         set -e
 
-        # Function to get all tags for a package
-        get_package_tags() {
-          local package_name=$1
-          local page=1
-          local per_page=100
-          local all_tags=()
+        IMAGE="${{ inputs.image-prefix-component }}"
+        DISTRO="${{ inputs.ros-distro }}"
+        DATE="${{ inputs.date }}"
+        TARGETS="${{ inputs.component-targets }}"
 
-          while true; do
-            response=$(curl -s -H "Authorization: Bearer ${{ inputs.token }}" \
-              "https://api.github.com/orgs/${{ github.repository_owner }}/packages/container/${package_name}/versions?per_page=${per_page}&page=${page}")
+        for target in ${TARGETS}; do
+          base_tag="${target}-${DISTRO}-${DATE}"
 
-            tags=$(echo "$response" | jq -r '.[].metadata.container.tags[]?' 2>/dev/null || echo "")
-
-            if [ -z "$tags" ]; then
-              break
-            fi
-
-            all_tags+=($tags)
-            page=$((page + 1))
-          done
-
-          echo "${all_tags[@]}"
-        }
-
-        # Function to create multi-arch manifest
-        create_manifest() {
-          local image_name=$1
-          local base_tag=$2
-
-          echo "Creating multi-arch manifest for ${image_name}:${base_tag}"
-
-          if docker buildx imagetools inspect "${image_name}:${base_tag}-amd64" >/dev/null 2>&1 && \
-             docker buildx imagetools inspect "${image_name}:${base_tag}-arm64" >/dev/null 2>&1; then
-            docker buildx imagetools create -t "${image_name}:${base_tag}" \
-              "${image_name}:${base_tag}-amd64" \
-              "${image_name}:${base_tag}-arm64"
-            echo "✓ Created ${image_name}:${base_tag}"
+          if [[ "${target}" == *cuda* ]]; then
+            # CUDA: single-arch alias (amd64-only)
+            echo "Creating single-arch manifest for ${IMAGE}:${base_tag}"
+            docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
+              "${IMAGE}:${target}-amd64-${DISTRO}-${DATE}"
+            echo "Created ${IMAGE}:${base_tag}"
           else
-            echo "⚠ Skipping ${base_tag}: not all architectures available"
-          fi
-        }
-
-        # Get package name from image prefix
-        package_name=$(echo "${{ inputs.image-prefix-component }}" | sed 's|.*/||')
-
-        echo "Fetching tags for package: ${package_name}"
-        all_tags=$(get_package_tags "${package_name}")
-
-        # Find base tags (without -amd64/-arm64 suffix)
-        base_tags=$(echo "${all_tags}" | tr ' ' '\n' | grep -E '.*-amd64$' | sed 's/-amd64$//' | sort -u)
-
-        # Create manifests for component images
-        for base_tag in $base_tags; do
-          # Only process tags for this ROS distro
-          if echo "$base_tag" | grep -q "${{ inputs.ros-distro }}"; then
-            create_manifest "${{ inputs.image-prefix-component }}" "$base_tag"
+            # Multi-arch manifest (amd64 + arm64)
+            echo "Creating multi-arch manifest for ${IMAGE}:${base_tag}"
+            docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
+              "${IMAGE}:${target}-amd64-${DISTRO}-${DATE}" \
+              "${IMAGE}:${target}-arm64-${DISTRO}-${DATE}"
+            echo "Created ${IMAGE}:${base_tag}"
           fi
         done
       shell: bash

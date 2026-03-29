@@ -384,7 +384,19 @@ jobs:
         uses: ./.github/actions/combine-multi-arch-images
         with:
           ros-distro: ${{ matrix.ros-distro }}
+          date: ${{ needs.build-common.outputs.date }}
           registry: ${{ env.REGISTRY }}
           image-prefix-common: ${{ env.IMAGE_PREFIX_COMMON }}
           image-prefix-component: ${{ env.IMAGE_PREFIX_COMPONENT }}
+          component-targets: >-
+            sensing-perception
+            sensing-perception-cuda
+            localization-mapping
+            planning-control
+            vehicle-system
+            api
+            visualizer
+            simulator
+            universe
+            universe-cuda
           token: ${{ secrets.GITHUB_TOKEN }}
