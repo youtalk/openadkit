@@ -2,9 +2,6 @@ name: build-all-images
 
 on:
   push:
-on:
-  schedule:
-    - cron: '0 0 1 * *'
     paths:
       - 'components/docker-bake.hcl'
       - 'components/common/**'
@@ -16,6 +13,8 @@ on:
       - 'components/visualizer/**'
       - 'components/simulator/**'
       - 'components/universe/**'
+  schedule:
+    - cron: '0 0 1 * *'
   workflow_dispatch:
 
 env:
