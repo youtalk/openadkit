@@ -14,7 +14,7 @@ ENV CCACHE_DIR="/root/.ccache"
 WORKDIR /autoware
 
 # Copy files
-COPY autoware/setup-dev-env.sh autoware/ansible-galaxy-requirements.yaml autoware/amd64.env autoware/amd64_jazzy.env autoware/arm64.env /autoware/
+COPY autoware/setup-dev-env.sh autoware/ansible-galaxy-requirements.yaml /autoware/
 COPY autoware/ansible/ /autoware/ansible/
 COPY components/common/scripts/ /scripts/
 RUN chmod -R +x /scripts/
