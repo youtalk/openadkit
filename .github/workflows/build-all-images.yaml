@@ -17,6 +17,10 @@ on:
     - cron: '0 0 1 * *'
   workflow_dispatch:
 
+concurrency:
+  group: build-all-images-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX_COMMON: ghcr.io/${{ github.repository_owner }}/openadkit-common
@@ -24,16 +28,33 @@ env:
   BAKE_FILE: components/docker-bake.hcl
 
 jobs:
+  prepare:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    outputs:
+      autoware_ref: ${{ steps.prepare.outputs.autoware_ref }}
+      build_tag: ${{ steps.prepare.outputs.build_tag }}
+    steps:
+      - name: Resolve shared build inputs
+        id: prepare
+        run: |
+          set -euo pipefail
+          autoware_ref=$(git ls-remote https://github.com/autowarefoundation/autoware refs/heads/main | cut -f1)
+          build_tag="$(date -u +'%Y%m%d')-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "autoware_ref=${autoware_ref}" >> "$GITHUB_OUTPUT"
+          echo "build_tag=${build_tag}" >> "$GITHUB_OUTPUT"
+        shell: bash
+
   # =============================================================================
   # Stage 1: Build common images
   # =============================================================================
   build-common:
+    needs: prepare
     runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
     permissions:
       contents: read
       packages: write
-    outputs:
-      date: ${{ steps.date.outputs.date }}
     strategy:
       fail-fast: false
       max-parallel: 8
@@ -55,7 +76,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: autowarefoundation/autoware
-          ref: main
+          ref: ${{ needs.prepare.outputs.autoware_ref }}
           path: autoware
           fetch-depth: 1
 
@@ -75,11 +96,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Get current date
-        id: date
-        run: echo "date=$(date +'%Y%m%d')" >> $GITHUB_OUTPUT
-        shell: bash
-
       - name: Extract metadata for openadkit-common:base
         id: meta-common-base
         uses: docker/metadata-action@v5
@@ -88,7 +104,7 @@ jobs:
           bake-target: docker-metadata-action-common-base
           tags: |
             type=raw,value=base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ steps.date.outputs.date }}
+            type=raw,value=base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
           flavor: |
             latest=false
 
@@ -100,7 +116,7 @@ jobs:
           bake-target: docker-metadata-action-common-base-cuda
           tags: |
             type=raw,value=base-cuda-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=base-cuda-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ steps.date.outputs.date }}
+            type=raw,value=base-cuda-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
           flavor: |
             latest=false
 
@@ -112,7 +128,7 @@ jobs:
           bake-target: docker-metadata-action-common-devel
           tags: |
             type=raw,value=devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ steps.date.outputs.date }}
+            type=raw,value=devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
           flavor: |
             latest=false
 
@@ -124,7 +140,7 @@ jobs:
           bake-target: docker-metadata-action-common-devel-cuda
           tags: |
             type=raw,value=devel-cuda-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=devel-cuda-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ steps.date.outputs.date }}
+            type=raw,value=devel-cuda-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
           flavor: |
             latest=false
 
@@ -170,7 +186,7 @@ jobs:
   # =============================================================================
   build-components:
     runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
-    needs: build-common
+    needs: [prepare, build-common]
     permissions:
       contents: read
       packages: write
@@ -211,7 +227,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: autowarefoundation/autoware
-          ref: main
+          ref: ${{ needs.prepare.outputs.autoware_ref }}
           path: autoware
           fetch-depth: 1
 
@@ -239,7 +255,7 @@ jobs:
           bake-target: docker-metadata-action-${{ matrix.target }}
           tags: |
             type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
+            type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
           flavor: |
             latest=false
 
@@ -254,10 +270,10 @@ jobs:
           set: |
             *.platform=${{ matrix.platform }}
             *.args.ROS_DISTRO=${{ matrix.ros-distro }}
-            *.args.COMMON_BASE_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.COMMON_BASE_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.COMMON_DEVEL_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.COMMON_DEVEL_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
+            *.args.COMMON_BASE_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.COMMON_BASE_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.COMMON_DEVEL_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.COMMON_DEVEL_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
             *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main
             *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main,mode=max
 
@@ -266,7 +282,7 @@ jobs:
   # =============================================================================
   build-universe:
     runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
-    needs: [build-common, build-components]
+    needs: [prepare, build-common, build-components]
     permissions:
       contents: read
       packages: write
@@ -286,8 +302,11 @@ jobs:
             ros-distro: jazzy
             target: universe-cuda
     steps:
+      - name: Checkout OpenADKit repository
+        uses: actions/checkout@v6
+
       - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
+        uses: ./.github/actions/free-disk-space
 
       - name: Install jq and vcs2l
         run: |
@@ -296,14 +315,11 @@ jobs:
           pipx install vcs2l
         shell: bash
 
-      - name: Checkout OpenADKit repository
-        uses: actions/checkout@v6
-
       - name: Checkout Autoware repository
         uses: actions/checkout@v6
         with:
           repository: autowarefoundation/autoware
-          ref: main
+          ref: ${{ needs.prepare.outputs.autoware_ref }}
           path: autoware
           fetch-depth: 1
 
@@ -331,7 +347,7 @@ jobs:
           bake-target: docker-metadata-action-${{ matrix.target }}
           tags: |
             type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
+            type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
           flavor: |
             latest=false
 
@@ -346,18 +362,18 @@ jobs:
           set: |
             *.platform=${{ matrix.platform }}
             *.args.ROS_DISTRO=${{ matrix.ros-distro }}
-            *.args.COMMON_BASE_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.COMMON_BASE_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.COMMON_DEVEL_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.COMMON_DEVEL_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.SENSING_PERCEPTION_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.SENSING_PERCEPTION_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.LOCALIZATION_MAPPING_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:localization-mapping-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.PLANNING_CONTROL_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:planning-control-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.VEHICLE_SYSTEM_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:vehicle-system-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.API_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:api-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.VISUALIZER_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:visualizer-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
-            *.args.SIMULATOR_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:simulator-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.build-common.outputs.date }}
+            *.args.COMMON_BASE_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.COMMON_BASE_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.COMMON_DEVEL_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.COMMON_DEVEL_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.SENSING_PERCEPTION_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.SENSING_PERCEPTION_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.LOCALIZATION_MAPPING_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:localization-mapping-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.PLANNING_CONTROL_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:planning-control-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.VEHICLE_SYSTEM_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:vehicle-system-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.API_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:api-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.VISUALIZER_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:visualizer-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.SIMULATOR_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:simulator-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
             *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main
             *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main,mode=max
 
@@ -366,7 +382,7 @@ jobs:
   # =============================================================================
   create-manifests:
     runs-on: ubuntu-22.04
-    needs: [build-common, build-components, build-universe]
+    needs: [prepare, build-common, build-components, build-universe]
     permissions:
       contents: read
       packages: write
@@ -385,7 +401,7 @@ jobs:
         uses: ./.github/actions/combine-multi-arch-images
         with:
           ros-distro: ${{ matrix.ros-distro }}
-          date: ${{ needs.build-common.outputs.date }}
+          build-tag: ${{ needs.prepare.outputs.build_tag }}
           registry: ${{ env.REGISTRY }}
           image-prefix-common: ${{ env.IMAGE_PREFIX_COMMON }}
           image-prefix-component: ${{ env.IMAGE_PREFIX_COMPONENT }}
