@@ -9,16 +9,22 @@ on:
         description: The Autoware tag to release
         required: true
 
+concurrency:
+  group: release-all-images-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX_COMMON: ghcr.io/${{ github.repository_owner }}/openadkit-common
   IMAGE_PREFIX_COMPONENT: ghcr.io/${{ github.repository_owner }}/openadkit
   BAKE_FILE: components/docker-bake.hcl
+  RELEASE_ROS_DISTRO: humble
+  RELEASE_BASE_IMAGE: ros:humble-ros-base-jammy
 
 jobs:
   detect-autoware-tag:
     name: Detect latest Autoware release tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: read
     outputs:
@@ -36,43 +42,39 @@ jobs:
           echo "${{ inputs.autoware_tag }}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
             || (echo "Invalid tag format '${{ inputs.autoware_tag }}': must be X.Y.Z" && exit 1)
 
-      - name: Get latest upstream semver tag (e.g. 1.2.3)
+      - name: Resolve upstream release tag
         id: latest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          api="https://api.github.com/repos/autowarefoundation/autoware"
+          auth_header="Authorization: Bearer ${GH_TOKEN}"
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             tag="${{ inputs.autoware_tag }}"
+            curl -fsSL -H "$auth_header" "${api}/releases/tags/${tag}" >/dev/null
           else
-            tags_json=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "https://api.github.com/repos/autowarefoundation/autoware/tags?per_page=3")
-            tag=$(
-              echo "$tags_json" \
-              | jq -r '.[].name' \
-              | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-              | sort -V \
-              | tail -n 1
-            )
+            tag=$(curl -fsSL -H "$auth_header" "${api}/releases/latest" | jq -r '.tag_name')
           fi
-          [ -n "$tag" ] || (echo "No semver tag found" && exit 1)
+
+          [ -n "$tag" ] && [ "$tag" != "null" ] || (echo "No release tag found" && exit 1)
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "Tag: $tag"
 
-      - name: Cache lookup for processed tag
+      - name: Restore processed tag marker
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: .autoware-tag-marker
           key: autoware-tag-${{ steps.latest.outputs.tag }}
-          restore-keys: |
-            autoware-tag-
 
       - name: Decide whether to run
         id: decide
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
-            echo "Manual dispatch — forcing run for tag ${{ steps.latest.outputs.tag }}"
+            echo "Manual dispatch - forcing run for tag ${{ steps.latest.outputs.tag }}"
           elif [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
             echo "should_run=false" >> "$GITHUB_OUTPUT"
             echo "Already processed tag ${{ steps.latest.outputs.tag }}"
@@ -81,28 +83,23 @@ jobs:
             echo "New tag detected: ${{ steps.latest.outputs.tag }}"
           fi
 
-      - name: Create marker (so cache gets saved)
-        if: steps.decide.outputs.should_run == 'true'
-        run: |
-          mkdir -p .autoware-tag-marker
-          echo "${{ steps.latest.outputs.tag }}" > .autoware-tag-marker/tag.txt
-          
-  # =============================================================================
-  # Stage 1: Build common images
-  # =============================================================================
   build-common:
-    runs-on: ubuntu-22.04
     needs: detect-autoware-tag
     if: needs.detect-autoware-tag.outputs.should_run == 'true'
+    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux/amd64, linux/arm64]
     steps:
       - name: Install jq and vcs2l
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq python3-pip
-          pip install --no-cache-dir vcs2l
+          sudo apt-get install -y jq pipx
+          pipx install vcs2l
         shell: bash
 
       - name: Checkout OpenADKit repository
@@ -115,11 +112,11 @@ jobs:
           ref: ${{ needs.detect-autoware-tag.outputs.autoware_tag }}
           path: autoware
           fetch-depth: 1
-    
+
       - name: Pull Autoware Source
         run: |
-            mkdir -p autoware/src
-            vcs import --shallow autoware/src < autoware/repositories/autoware.repos
+          mkdir -p autoware/src
+          vcs import --shallow autoware/src < autoware/repositories/autoware.repos
         shell: bash
 
       - name: Set up Docker Buildx
@@ -139,7 +136,7 @@ jobs:
           images: ${{ env.IMAGE_PREFIX_COMMON }}
           bake-target: docker-metadata-action-common-base
           tags: |
-            type=raw,value=base-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            type=raw,value=base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
           flavor: |
             latest=false
 
@@ -150,7 +147,7 @@ jobs:
           images: ${{ env.IMAGE_PREFIX_COMMON }}
           bake-target: docker-metadata-action-common-base-cuda
           tags: |
-            type=raw,value=base-cuda-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            type=raw,value=base-cuda-amd64-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
           flavor: |
             latest=false
 
@@ -161,7 +158,7 @@ jobs:
           images: ${{ env.IMAGE_PREFIX_COMMON }}
           bake-target: docker-metadata-action-common-devel
           tags: |
-            type=raw,value=devel-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            type=raw,value=devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
           flavor: |
             latest=false
 
@@ -172,57 +169,75 @@ jobs:
           images: ${{ env.IMAGE_PREFIX_COMMON }}
           bake-target: docker-metadata-action-common-devel-cuda
           tags: |
-            type=raw,value=devel-cuda-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            type=raw,value=devel-cuda-amd64-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
           flavor: |
             latest=false
 
-      - name: Build and push common images
+      - name: Build and push common images (non-CUDA)
         uses: docker/bake-action@v5
         with:
           files: |
             ${{ env.BAKE_FILE }}
             ${{ steps.meta-common-base.outputs.bake-file }}
-            ${{ steps.meta-common-base-cuda.outputs.bake-file }}
             ${{ steps.meta-common-devel.outputs.bake-file }}
-            ${{ steps.meta-common-devel-cuda.outputs.bake-file }}
           targets: |
             common-base
-            common-base-cuda
             common-devel
+          push: true
+          set: |
+            *.platform=${{ matrix.platform }}
+            *.args.ROS_DISTRO=${{ env.RELEASE_ROS_DISTRO }}
+            *.args.BASE_IMAGE=${{ env.RELEASE_BASE_IMAGE }}
+            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:common-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ env.RELEASE_ROS_DISTRO }}-release
+            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:common-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ env.RELEASE_ROS_DISTRO }}-release,mode=max
+
+      - name: Build and push common images (CUDA, amd64 only)
+        if: matrix.platform == 'linux/amd64'
+        uses: docker/bake-action@v5
+        with:
+          files: |
+            ${{ env.BAKE_FILE }}
+            ${{ steps.meta-common-base-cuda.outputs.bake-file }}
+            ${{ steps.meta-common-devel-cuda.outputs.bake-file }}
+          targets: |
+            common-base-cuda
             common-devel-cuda
           push: true
           set: |
-            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:common-main
-            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:common-main,mode=max
+            *.platform=${{ matrix.platform }}
+            *.args.ROS_DISTRO=${{ env.RELEASE_ROS_DISTRO }}
+            *.args.BASE_IMAGE=${{ env.RELEASE_BASE_IMAGE }}
+            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:common-cuda-${{ env.RELEASE_ROS_DISTRO }}-release
+            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:common-cuda-${{ env.RELEASE_ROS_DISTRO }}-release,mode=max
 
-  # =============================================================================
-  # Stage 2: Build component images (parallel)
-  # =============================================================================
   build-components:
-    runs-on: ubuntu-22.04
-    needs: [build-common, detect-autoware-tag]
+    needs: [detect-autoware-tag, build-common]
     if: needs.detect-autoware-tag.outputs.should_run == 'true'
+    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
     permissions:
       contents: read
       packages: write
     strategy:
       fail-fast: false
       matrix:
+        platform: [linux/amd64, linux/arm64]
+        target:
+          - sensing-perception
+          - localization-mapping
+          - planning-control
+          - vehicle-system
+          - api
+          - visualizer
+          - simulator
         include:
-          - target: sensing-perception
-          - target: sensing-perception-cuda
-          - target: localization-mapping
-          - target: planning-control
-          - target: vehicle-system
-          - target: api
-          - target: visualizer
-          - target: simulator
+          - platform: linux/amd64
+            target: sensing-perception-cuda
     steps:
       - name: Install jq and vcs2l
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq python3-pip
-          pip install --no-cache-dir vcs2l
+          sudo apt-get install -y jq pipx
+          pipx install vcs2l
         shell: bash
 
       - name: Checkout OpenADKit repository
@@ -235,11 +250,11 @@ jobs:
           ref: ${{ needs.detect-autoware-tag.outputs.autoware_tag }}
           path: autoware
           fetch-depth: 1
-    
+
       - name: Pull Autoware Source
         run: |
-            mkdir -p autoware/src
-            vcs import --shallow autoware/src < autoware/repositories/autoware.repos
+          mkdir -p autoware/src
+          vcs import --shallow autoware/src < autoware/repositories/autoware.repos
         shell: bash
 
       - name: Set up Docker Buildx
@@ -259,7 +274,7 @@ jobs:
           images: ${{ env.IMAGE_PREFIX_COMPONENT }}
           bake-target: docker-metadata-action-${{ matrix.target }}
           tags: |
-            type=raw,value=${{ matrix.target }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
           flavor: |
             latest=false
 
@@ -272,20 +287,19 @@ jobs:
           targets: ${{ matrix.target }}
           push: true
           set: |
-            *.args.COMMON_BASE_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.COMMON_BASE_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-cuda-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.COMMON_DEVEL_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.COMMON_DEVEL_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-cuda-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-main
-            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-main,mode=max
+            *.platform=${{ matrix.platform }}
+            *.args.ROS_DISTRO=${{ env.RELEASE_ROS_DISTRO }}
+            *.args.COMMON_BASE_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.COMMON_BASE_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-cuda-amd64-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.COMMON_DEVEL_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.COMMON_DEVEL_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-cuda-amd64-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ env.RELEASE_ROS_DISTRO }}-release
+            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ env.RELEASE_ROS_DISTRO }}-release,mode=max
 
-  # =============================================================================
-  # Stage 3: Build universe and universe-cuda images (parallel)
-  # =============================================================================
   build-universe:
-    runs-on: ubuntu-22.04
     needs: [detect-autoware-tag, build-common, build-components]
     if: needs.detect-autoware-tag.outputs.should_run == 'true'
+    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
     permissions:
       contents: read
       packages: write
@@ -293,18 +307,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: universe
-          - target: universe-cuda
+          - platform: linux/amd64
+            target: universe
+          - platform: linux/arm64
+            target: universe
+          - platform: linux/amd64
+            target: universe-cuda
     steps:
       - name: Install jq and vcs2l
         run: |
           sudo apt-get update
-          sudo apt-get install -y jq python3-pip
-          pip install --no-cache-dir vcs2l
+          sudo apt-get install -y jq pipx
+          pipx install vcs2l
         shell: bash
 
       - name: Checkout OpenADKit repository
         uses: actions/checkout@v6
+
+      - name: Free Disk Space (Ubuntu)
+        uses: ./.github/actions/free-disk-space
 
       - name: Checkout Autoware repository
         uses: actions/checkout@v6
@@ -313,11 +334,11 @@ jobs:
           ref: ${{ needs.detect-autoware-tag.outputs.autoware_tag }}
           path: autoware
           fetch-depth: 1
-    
+
       - name: Pull Autoware Source
         run: |
-            mkdir -p autoware/src
-            vcs import --shallow autoware/src < autoware/repositories/autoware.repos
+          mkdir -p autoware/src
+          vcs import --shallow autoware/src < autoware/repositories/autoware.repos
         shell: bash
 
       - name: Set up Docker Buildx
@@ -329,7 +350,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
+
       - name: Extract metadata for ${{ matrix.target }}
         id: meta
         uses: docker/metadata-action@v5
@@ -337,7 +358,7 @@ jobs:
           images: ${{ env.IMAGE_PREFIX_COMPONENT }}
           bake-target: docker-metadata-action-${{ matrix.target }}
           tags: |
-            type=raw,value=${{ matrix.target }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
           flavor: |
             latest=false
 
@@ -350,17 +371,77 @@ jobs:
           targets: ${{ matrix.target }}
           push: true
           set: |
-            *.args.COMMON_BASE_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.COMMON_BASE_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-cuda-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.COMMON_DEVEL_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.COMMON_DEVEL_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-cuda-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.SENSING_PERCEPTION_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.SENSING_PERCEPTION_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-cuda-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.LOCALIZATION_MAPPING_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:localization-mapping-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.PLANNING_CONTROL_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:planning-control-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.VEHICLE_SYSTEM_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:vehicle-system-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.API_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:api-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.VISUALIZER_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:visualizer-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.args.SIMULATOR_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:simulator-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
-            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-main
-            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-main,mode=max
+            *.platform=${{ matrix.platform }}
+            *.args.ROS_DISTRO=${{ env.RELEASE_ROS_DISTRO }}
+            *.args.COMMON_BASE_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.COMMON_BASE_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-cuda-amd64-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.COMMON_DEVEL_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.COMMON_DEVEL_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-cuda-amd64-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.SENSING_PERCEPTION_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.SENSING_PERCEPTION_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-cuda-amd64-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.LOCALIZATION_MAPPING_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:localization-mapping-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.PLANNING_CONTROL_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:planning-control-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.VEHICLE_SYSTEM_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:vehicle-system-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.API_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:api-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.VISUALIZER_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:visualizer-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.args.SIMULATOR_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:simulator-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ env.RELEASE_ROS_DISTRO }}-release
+            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ env.RELEASE_ROS_DISTRO }}-release,mode=max
+
+  create-manifests:
+    needs: [detect-autoware-tag, build-common, build-components, build-universe]
+    if: needs.detect-autoware-tag.outputs.should_run == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout OpenADKit repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Combine release multi-arch images
+        uses: ./.github/actions/combine-release-multi-arch-images
+        with:
+          release-tag: ${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+          registry: ${{ env.REGISTRY }}
+          image-prefix-common: ${{ env.IMAGE_PREFIX_COMMON }}
+          image-prefix-component: ${{ env.IMAGE_PREFIX_COMPONENT }}
+          component-targets: >-
+            sensing-perception
+            sensing-perception-cuda
+            localization-mapping
+            planning-control
+            vehicle-system
+            api
+            visualizer
+            simulator
+            universe
+            universe-cuda
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  mark-processed:
+    needs: [detect-autoware-tag, create-manifests]
+    if: needs.detect-autoware-tag.outputs.should_run == 'true' && needs.create-manifests.result == 'success'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Restore existing processed tag marker
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .autoware-tag-marker
+          key: autoware-tag-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+
+      - name: Create processed tag marker
+        run: |
+          mkdir -p .autoware-tag-marker
+          echo "${{ needs.detect-autoware-tag.outputs.autoware_tag }}" > .autoware-tag-marker/tag.txt
+
+      - name: Save processed tag marker
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: .autoware-tag-marker
+          key: autoware-tag-${{ needs.detect-autoware-tag.outputs.autoware_tag }}

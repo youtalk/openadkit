@@ -1,0 +1,76 @@
+name: Combine release multi-arch images
+description: Create release manifests from architecture-specific image tags
+
+inputs:
+  release-tag:
+    description: Immutable Autoware release tag
+    required: true
+  registry:
+    description: Container registry hostname
+    required: true
+  image-prefix-common:
+    description: Fully qualified common image name prefix
+    required: true
+  image-prefix-component:
+    description: Fully qualified component image name prefix
+    required: true
+  component-targets:
+    description: Space-separated component targets to combine
+    required: true
+  token:
+    description: Token used to authenticate to the registry
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ inputs.registry }}
+        username: ${{ github.actor }}
+        password: ${{ inputs.token }}
+
+    - name: Combine common images
+      shell: bash
+      run: |
+        set -euo pipefail
+        image="${{ inputs.image-prefix-common }}"
+        release_tag="${{ inputs.release-tag }}"
+
+        for variant in base devel; do
+          final_tag="${variant}-${release_tag}"
+          echo "Creating multi-arch manifest for ${image}:${final_tag}"
+          docker buildx imagetools create -t "${image}:${final_tag}" \
+            "${image}:${variant}-amd64-${release_tag}" \
+            "${image}:${variant}-arm64-${release_tag}"
+        done
+
+        for variant in base-cuda devel-cuda; do
+          final_tag="${variant}-${release_tag}"
+          echo "Creating amd64 alias for ${image}:${final_tag}"
+          docker buildx imagetools create -t "${image}:${final_tag}" \
+            "${image}:${variant}-amd64-${release_tag}"
+        done
+
+    - name: Combine component images
+      shell: bash
+      run: |
+        set -euo pipefail
+        image="${{ inputs.image-prefix-component }}"
+        release_tag="${{ inputs.release-tag }}"
+        targets="${{ inputs.component-targets }}"
+
+        for target in ${targets}; do
+          final_tag="${target}-${release_tag}"
+          if [[ "${target}" == *-cuda ]]; then
+            echo "Creating amd64 alias for ${image}:${final_tag}"
+            docker buildx imagetools create -t "${image}:${final_tag}" \
+              "${image}:${target}-amd64-${release_tag}"
+          else
+            echo "Creating multi-arch manifest for ${image}:${final_tag}"
+            docker buildx imagetools create -t "${image}:${final_tag}" \
+              "${image}:${target}-amd64-${release_tag}" \
+              "${image}:${target}-arm64-${release_tag}"
+          fi
+        done
