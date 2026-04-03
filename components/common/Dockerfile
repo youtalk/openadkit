@@ -35,6 +35,33 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   && mkdir -p ~/.ssh \
   && ssh-keyscan github.com >> ~/.ssh/known_hosts
 
+# Older Autoware releases source these env files from setup-dev-env.sh.
+RUN printf '%s\n' \
+  '# ROS distribution' \
+  'rosdistro=humble' \
+  'rmw_implementation=rmw_cyclonedds_cpp' \
+  'base_image=ros:humble-ros-base-jammy' \
+  'autoware_base_image=ghcr.io/autowarefoundation/autoware-base:latest' \
+  'autoware_base_cuda_image=ghcr.io/autowarefoundation/autoware-base:cuda-latest' \
+  'cuda_version=12.8' \
+  'tensorrt_version=10.8.0.43-1+cuda12.8' \
+  'cumm_version=0.5.3' \
+  'spconv_version=2.3.8' > /autoware/amd64.env \
+  && printf '%s\n' \
+  '# ROS distribution' \
+  'rosdistro=jazzy' \
+  'rmw_implementation=rmw_cyclonedds_cpp' \
+  'base_image=ros:jazzy-ros-base-noble' \
+  'autoware_base_image=ghcr.io/autowarefoundation/autoware-base:latest-jazzy' \
+  'autoware_base_cuda_image=ghcr.io/autowarefoundation/autoware-base:cuda-latest-jazzy' \
+  'cuda_version=12.8' \
+  'tensorrt_version=10.8.0.43-1+cuda12.8' \
+  'cumm_version=0.5.3' \
+  'spconv_version=2.3.8' > /autoware/amd64_jazzy.env \
+  && printf '%s\n' \
+  '# Override amd64 settings' \
+  'tensorrt_version=10.3.0.26-1+cuda12.5' > /autoware/arm64.env
+
 # Set up base environment
 RUN --mount=type=ssh \
   --mount=type=cache,target=/var/cache/apt,sharing=locked \
