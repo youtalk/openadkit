@@ -14,7 +14,7 @@ ENV CCACHE_DIR="/root/.ccache"
 WORKDIR /autoware
 
 # Copy files
-COPY autoware/setup-dev-env.sh autoware/ansible-galaxy-requirements.yaml autoware/amd64.env autoware/amd64_jazzy.env autoware/arm64.env /autoware/
+COPY autoware/setup-dev-env.sh autoware/ansible-galaxy-requirements.yaml /autoware/
 COPY autoware/ansible/ /autoware/ansible/
 COPY components/common/scripts/ /scripts/
 RUN chmod -R +x /scripts/
@@ -26,6 +26,7 @@ RUN echo 'APT::Install-Recommends "false";' > /etc/apt/apt.conf.d/99-disable-ext
 # Install apt packages and add GitHub to known hosts for private repositories
 RUN rm -f /etc/apt/apt.conf.d/docker-clean \
   && echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' >/etc/apt/apt.conf.d/keep-cache
+RUN printf 'Acquire::Retries "5";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' > /etc/apt/apt.conf.d/80-retries
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
   apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends \
   gosu \

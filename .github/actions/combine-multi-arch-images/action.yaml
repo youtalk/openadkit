@@ -5,8 +5,8 @@ inputs:
   ros-distro:
     description: ROS distribution name
     required: true
-  date:
-    description: Build date stamp (YYYYMMDD)
+  build-tag:
+    description: Immutable build tag for this workflow run
     required: true
   registry:
     description: Container registry
@@ -40,7 +40,7 @@ runs:
 
         IMAGE="${{ inputs.image-prefix-common }}"
         DISTRO="${{ inputs.ros-distro }}"
-        DATE="${{ inputs.date }}"
+        BUILD_TAG="${{ inputs.build-tag }}"
 
         # Known common image variants
         MULTI_ARCH_VARIANTS="base devel"
@@ -48,20 +48,20 @@ runs:
 
         # Create multi-arch manifests (amd64 + arm64)
         for variant in ${MULTI_ARCH_VARIANTS}; do
-          base_tag="${variant}-${DISTRO}-${DATE}"
+          base_tag="${variant}-${DISTRO}-${BUILD_TAG}"
           echo "Creating multi-arch manifest for ${IMAGE}:${base_tag}"
           docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
-            "${IMAGE}:${variant}-amd64-${DISTRO}-${DATE}" \
-            "${IMAGE}:${variant}-arm64-${DISTRO}-${DATE}"
+            "${IMAGE}:${variant}-amd64-${DISTRO}-${BUILD_TAG}" \
+            "${IMAGE}:${variant}-arm64-${DISTRO}-${BUILD_TAG}"
           echo "Created ${IMAGE}:${base_tag}"
         done
 
         # Create single-arch aliases for CUDA (amd64-only)
         for variant in ${CUDA_VARIANTS}; do
-          base_tag="${variant}-${DISTRO}-${DATE}"
+          base_tag="${variant}-${DISTRO}-${BUILD_TAG}"
           echo "Creating single-arch manifest for ${IMAGE}:${base_tag}"
           docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
-            "${IMAGE}:${variant}-amd64-${DISTRO}-${DATE}"
+            "${IMAGE}:${variant}-amd64-${DISTRO}-${BUILD_TAG}"
           echo "Created ${IMAGE}:${base_tag}"
         done
       shell: bash
@@ -72,24 +72,24 @@ runs:
 
         IMAGE="${{ inputs.image-prefix-component }}"
         DISTRO="${{ inputs.ros-distro }}"
-        DATE="${{ inputs.date }}"
+        BUILD_TAG="${{ inputs.build-tag }}"
         TARGETS="${{ inputs.component-targets }}"
 
         for target in ${TARGETS}; do
-          base_tag="${target}-${DISTRO}-${DATE}"
+          base_tag="${target}-${DISTRO}-${BUILD_TAG}"
 
           if [[ "${target}" == *cuda* ]]; then
             # CUDA: single-arch alias (amd64-only)
             echo "Creating single-arch manifest for ${IMAGE}:${base_tag}"
             docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
-              "${IMAGE}:${target}-amd64-${DISTRO}-${DATE}"
+              "${IMAGE}:${target}-amd64-${DISTRO}-${BUILD_TAG}"
             echo "Created ${IMAGE}:${base_tag}"
           else
             # Multi-arch manifest (amd64 + arm64)
             echo "Creating multi-arch manifest for ${IMAGE}:${base_tag}"
             docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
-              "${IMAGE}:${target}-amd64-${DISTRO}-${DATE}" \
-              "${IMAGE}:${target}-arm64-${DISTRO}-${DATE}"
+              "${IMAGE}:${target}-amd64-${DISTRO}-${BUILD_TAG}" \
+              "${IMAGE}:${target}-arm64-${DISTRO}-${BUILD_TAG}"
             echo "Created ${IMAGE}:${base_tag}"
           fi
         done
