@@ -101,3 +101,12 @@ target "localization-mapping" {
   tags       = tags("localization-mapping")
   platforms  = PLATFORM == "" ? [] : [PLATFORM]
 }
+
+target "planning-control" {
+  inherits   = ["_component-base"]
+  context    = "."
+  dockerfile = "docker/planning-control/Dockerfile"
+  target     = "planning-control"
+  tags       = tags("planning-control")
+  platforms  = PLATFORM == "" ? [] : [PLATFORM]
+}
