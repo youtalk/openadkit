@@ -1,0 +1,8 @@
+# extras/repos.yaml - external ROS sources used by openadkit-only component layers.
+# Populate per the per-component package inventory. An empty stub is valid.
+repositories:
+  # Example (uncomment + edit):
+  # sensing-perception/src/sensor_component:
+  #   type: git
+  #   url: https://github.com/autowarefoundation/sensor_component.git
+  #   version: main
