@@ -119,3 +119,12 @@ target "sensing-perception" {
   tags       = tags("sensing-perception")
   platforms  = PLATFORM == "" ? [] : [PLATFORM]
 }
+
+target "simulator" {
+  inherits   = ["_component-base"]
+  context    = "."
+  dockerfile = "docker/simulator/Dockerfile"
+  target     = "simulator"
+  tags       = tags("simulator")
+  platforms  = PLATFORM == "" ? [] : [PLATFORM]
+}
