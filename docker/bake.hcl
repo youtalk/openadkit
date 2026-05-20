@@ -83,3 +83,12 @@ target "_component-cuda-base" {
     UPSTREAM_RUN   = upstream("runtime-cuda")
   }
 }
+
+target "api" {
+  inherits   = ["_component-base"]
+  context    = "."
+  dockerfile = "docker/api/Dockerfile"
+  target     = "api"
+  tags       = tags("api")
+  platforms  = PLATFORM == "" ? [] : [PLATFORM]
+}
