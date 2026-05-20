@@ -155,3 +155,12 @@ target "sensing-perception-cuda" {
   tags       = tags("sensing-perception-cuda")
   platforms  = PLATFORM == "" ? [] : [PLATFORM]
 }
+
+target "universe" {
+  inherits   = ["_component-base"]
+  context    = "."
+  dockerfile = "docker/universe/Dockerfile"
+  target     = "universe"
+  tags       = tags("universe")
+  platforms  = PLATFORM == "" ? [] : [PLATFORM]
+}
