@@ -164,3 +164,12 @@ target "universe" {
   tags       = tags("universe")
   platforms  = PLATFORM == "" ? [] : [PLATFORM]
 }
+
+target "universe-cuda" {
+  inherits   = ["_component-cuda-base"]
+  context    = "."
+  dockerfile = "docker/universe/Dockerfile.cuda"
+  target     = "universe-cuda"
+  tags       = tags("universe-cuda")
+  platforms  = PLATFORM == "" ? [] : [PLATFORM]
+}

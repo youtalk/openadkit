@@ -1,0 +1,13 @@
+# docker/universe/Dockerfile.cuda
+# Passthrough CUDA aggregator: openadkit:universe-cuda-<distro> re-tags the
+# upstream universe-cuda-<distro> runtime image. Same shape as
+# docker/universe/Dockerfile but parented on the CUDA flavor. arm64
+# availability is gated by upstream and probed at CI job start via
+# scripts/probe_upstream_cuda_arm64.sh.
+
+# hadolint ignore=DL3006
+ARG UPSTREAM_DEVEL
+ARG UPSTREAM_RUN
+ARG ROS_DISTRO=jazzy
+
+FROM ${UPSTREAM_RUN} AS universe-cuda
