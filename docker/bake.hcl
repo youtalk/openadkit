@@ -92,3 +92,12 @@ target "api" {
   tags       = tags("api")
   platforms  = PLATFORM == "" ? [] : [PLATFORM]
 }
+
+target "localization-mapping" {
+  inherits   = ["_component-base"]
+  context    = "."
+  dockerfile = "docker/localization-mapping/Dockerfile"
+  target     = "localization-mapping"
+  tags       = tags("localization-mapping")
+  platforms  = PLATFORM == "" ? [] : [PLATFORM]
+}
