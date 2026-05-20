@@ -1,24 +1,28 @@
 // docker/bake.hcl - openadkit container build graph
 // Mirrors the ctx()/tags() helper pattern from upstream autoware/docker/docker-bake.hcl.
 
-variable "ROS_DISTRO"     { default = "jazzy" }
-variable "UPSTREAM_REPO"  { default = "ghcr.io/autowarefoundation/autoware" }
-variable "UPSTREAM_TAG"   { default = "" }     // empty => "universe[-cuda]-<distro>" rolling
-variable "REGISTRY"       { default = "" }
-variable "PLATFORM"       { default = "" }
-variable "TAG_DATE"       { default = "" }
-variable "TAG_VERSION"    { default = "" }
+variable "ROS_DISTRO"        { default = "jazzy" }
+variable "UPSTREAM_REPO"     { default = "ghcr.io/autowarefoundation/autoware" }
+// UPSTREAM_VERSION pins all upstream parent images to a single version
+// suffix (e.g. "1.8.0" or "20260520"). Each stage still resolves to its own
+// per-stage tag — `devel`/`runtime`/CUDA siblings stay distinct. Empty means
+// rolling `universe[-cuda][-devel]-<distro>`.
+variable "UPSTREAM_VERSION"  { default = "" }
+variable "REGISTRY"          { default = "" }
+variable "PLATFORM"          { default = "" }
+variable "TAG_DATE"          { default = "" }
+variable "TAG_VERSION"       { default = "" }
 variable "USE_REGISTRY_CONTEXTS" { default = false }
 
 // Resolve the upstream parent image tag for a given stage suffix.
 // stage = "devel" | "devel-cuda" | "runtime" | "runtime-cuda"
 function "upstream" {
   params = [stage]
-  result = UPSTREAM_TAG != "" ? "${UPSTREAM_REPO}:${UPSTREAM_TAG}" : (
-    stage == "devel"        ? "${UPSTREAM_REPO}:universe-devel-${ROS_DISTRO}"      :
-    stage == "devel-cuda"   ? "${UPSTREAM_REPO}:universe-devel-cuda-${ROS_DISTRO}" :
-    stage == "runtime"      ? "${UPSTREAM_REPO}:universe-${ROS_DISTRO}"            :
-    stage == "runtime-cuda" ? "${UPSTREAM_REPO}:universe-cuda-${ROS_DISTRO}"       :
+  result = (
+    stage == "devel"        ? "${UPSTREAM_REPO}:universe-devel-${ROS_DISTRO}${UPSTREAM_VERSION != "" ? "-${UPSTREAM_VERSION}" : ""}"      :
+    stage == "devel-cuda"   ? "${UPSTREAM_REPO}:universe-devel-cuda-${ROS_DISTRO}${UPSTREAM_VERSION != "" ? "-${UPSTREAM_VERSION}" : ""}" :
+    stage == "runtime"      ? "${UPSTREAM_REPO}:universe-${ROS_DISTRO}${UPSTREAM_VERSION != "" ? "-${UPSTREAM_VERSION}" : ""}"            :
+    stage == "runtime-cuda" ? "${UPSTREAM_REPO}:universe-cuda-${ROS_DISTRO}${UPSTREAM_VERSION != "" ? "-${UPSTREAM_VERSION}" : ""}"       :
     "INVALID-STAGE"
   )
 }
