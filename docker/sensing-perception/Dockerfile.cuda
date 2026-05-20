@@ -1,0 +1,11 @@
+# docker/sensing-perception/Dockerfile.cuda
+# Passthrough CUDA component: sensing-perception-cuda re-tags the upstream
+# universe-cuda-<distro> image. Will become a two-stage build only if
+# openadkit-only CUDA sources are ever added to extras/sensing-perception/src/.
+
+# hadolint ignore=DL3006
+ARG UPSTREAM_DEVEL
+ARG UPSTREAM_RUN
+ARG ROS_DISTRO=jazzy
+
+FROM ${UPSTREAM_RUN} AS sensing-perception-cuda
