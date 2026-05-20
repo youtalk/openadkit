@@ -128,3 +128,12 @@ target "simulator" {
   tags       = tags("simulator")
   platforms  = PLATFORM == "" ? [] : [PLATFORM]
 }
+
+target "vehicle-system" {
+  inherits   = ["_component-base"]
+  context    = "."
+  dockerfile = "docker/vehicle-system/Dockerfile"
+  target     = "vehicle-system"
+  tags       = tags("vehicle-system")
+  platforms  = PLATFORM == "" ? [] : [PLATFORM]
+}
