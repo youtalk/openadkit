@@ -137,3 +137,12 @@ target "vehicle-system" {
   tags       = tags("vehicle-system")
   platforms  = PLATFORM == "" ? [] : [PLATFORM]
 }
+
+target "visualizer" {
+  inherits   = ["_component-base"]
+  context    = "."
+  dockerfile = "docker/visualizer/Dockerfile"
+  target     = "visualizer"
+  tags       = tags("visualizer")
+  platforms  = PLATFORM == "" ? [] : [PLATFORM]
+}
