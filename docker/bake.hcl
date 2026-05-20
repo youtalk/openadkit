@@ -39,6 +39,9 @@ function "ctx" {
   result = USE_REGISTRY_CONTEXTS ? "docker-image://${tags(name)[0]}" : "target:${name}"
 }
 
+// Forward-looking group definitions. The named targets land alongside
+// their Dockerfiles in follow-up commits; bake will report "failed to find
+// target ..." until then.
 group "default" {
   targets = [
     "sensing-perception",

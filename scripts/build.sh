@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
-# scripts/build.sh - local convenience wrapper around `docker buildx bake -f docker/bake.hcl`
+# scripts/build.sh - local convenience wrapper around `docker buildx bake -f docker/bake.hcl`.
+#
+# This wrapper drives the docker/bake.hcl pipeline. The build graph is added
+# incrementally: until per-component targets are wired up alongside their
+# Dockerfiles, invoking this script will fail at the bake step. The legacy
+# repo-root ./build.sh continues to drive the existing components/ pipeline
+# and remains the working builder in the meantime.
 set -euo pipefail
 
 ROS_DISTRO="jazzy"
@@ -10,6 +16,12 @@ TARGET=""
 print_help() {
   cat <<EOF
 Usage: scripts/build.sh [--ros-distro humble|jazzy] [--cuda] [--upstream-tag TAG] [--target NAME]
+
+Wraps the new docker/bake.hcl pipeline. Per-component targets are added
+alongside their Dockerfiles in follow-up commits; until then bake will
+report "failed to find target ...". The legacy repo-root ./build.sh
+drives the existing components/ pipeline and stays the working builder
+until the migration is complete.
 
 Examples:
   scripts/build.sh
