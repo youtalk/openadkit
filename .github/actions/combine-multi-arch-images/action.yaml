@@ -27,9 +27,19 @@ runs:
         TARGETS: ${{ inputs.component-targets }}
       run: |
         set -euo pipefail
-        suffixes=("")                       # always produce the unsuffixed rolling tag
-        [ -n "$DATE" ]    && suffixes+=("$DATE")
-        [ -n "$VERSION" ] && suffixes+=("$VERSION")
+        suffixes=()
+        if [ -n "$DATE" ]; then
+          # build-all-images path: emit both the rolling tag and the dated tag.
+          suffixes+=("" "$DATE")
+        fi
+        if [ -n "$VERSION" ]; then
+          # release-all-images path: emit only the version-pinned tag.
+          suffixes+=("$VERSION")
+        fi
+        if [ ${#suffixes[@]} -eq 0 ]; then
+          echo "::error::combine-multi-arch-images requires at least one of date or version"
+          exit 1
+        fi
         for t in $TARGETS; do
           for s in "${suffixes[@]}"; do
             tag="${PREFIX}:${t}-${DISTRO}${s:+-$s}"

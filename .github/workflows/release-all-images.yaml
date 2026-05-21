@@ -35,6 +35,8 @@ jobs:
           set -euo pipefail
           tag="${INPUT_TAG:-$DISPATCH_TAG}"
           [ -n "$tag" ] || { echo "no upstream_tag provided" >&2; exit 1; }
+          echo "$tag" | grep -qE '^universe(-cuda)?-(humble|jazzy)-.+$' \
+            || { echo "tag $tag does not match universe[-cuda]-<humble|jazzy>-<version>" >&2; exit 1; }
           # Accept universe-<distro>-<version> or universe-cuda-<distro>-<version>
           ros_distro=$(echo "$tag" | sed -E 's/^universe(-cuda)?-(humble|jazzy)-.*/\2/')
           version=$(echo    "$tag" | sed -E 's/^universe(-cuda)?-(humble|jazzy)-//')
@@ -89,8 +91,86 @@ jobs:
             *.args.UPSTREAM_RUN=ghcr.io/autowarefoundation/autoware:universe-${{ needs.resolve.outputs.ros_distro }}-${{ needs.resolve.outputs.version }}
             *.tags=${{ env.IMAGE_PREFIX }}:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.resolve.outputs.ros_distro }}-${{ needs.resolve.outputs.version }}
 
+  build-components-cuda:
+    needs: resolve
+    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [sensing-perception-cuda]
+        platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@v6
+      - id: probe
+        if: matrix.platform == 'linux/arm64'
+        env:
+          DISTRO: ${{ needs.resolve.outputs.ros_distro }}
+        run: |
+          arm=$(./scripts/probe_upstream_cuda_arm64.sh "$DISTRO")
+          echo "should_build=$arm" >> "$GITHUB_OUTPUT"
+      - if: matrix.platform == 'linux/amd64' || steps.probe.outputs.should_build == 'true'
+        uses: docker/setup-buildx-action@v3
+      - if: matrix.platform == 'linux/amd64' || steps.probe.outputs.should_build == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - if: matrix.platform == 'linux/amd64' || steps.probe.outputs.should_build == 'true'
+        uses: docker/bake-action@v5
+        with:
+          files: ${{ env.BAKE_FILE }}
+          targets: ${{ matrix.target }}
+          push: true
+          set: |
+            *.platform=${{ matrix.platform }}
+            *.args.ROS_DISTRO=${{ needs.resolve.outputs.ros_distro }}
+            *.args.UPSTREAM_DEVEL=ghcr.io/autowarefoundation/autoware:universe-devel-cuda-${{ needs.resolve.outputs.ros_distro }}-${{ needs.resolve.outputs.version }}
+            *.args.UPSTREAM_RUN=ghcr.io/autowarefoundation/autoware:universe-cuda-${{ needs.resolve.outputs.ros_distro }}-${{ needs.resolve.outputs.version }}
+            *.tags=${{ env.IMAGE_PREFIX }}:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.resolve.outputs.ros_distro }}-${{ needs.resolve.outputs.version }}
+      - if: matrix.platform == 'linux/arm64' && steps.probe.outputs.should_build != 'true'
+        run: echo "::warning::Skipping ${{ matrix.target }} on arm64; upstream universe-cuda-${{ needs.resolve.outputs.ros_distro }}-${{ needs.resolve.outputs.version }} has no arm64 layer"
+
+  build-universe:
+    needs: [resolve, build-components, build-components-cuda]
+    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:  [linux/amd64, linux/arm64]
+        target:    [universe]
+        include:
+          - platform: linux/amd64
+            target: universe-cuda
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/free-disk-space
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/bake-action@v5
+        with:
+          files: ${{ env.BAKE_FILE }}
+          targets: ${{ matrix.target }}
+          push: true
+          set: |
+            *.platform=${{ matrix.platform }}
+            *.args.ROS_DISTRO=${{ needs.resolve.outputs.ros_distro }}
+            *.args.UPSTREAM_DEVEL=ghcr.io/autowarefoundation/autoware:universe-devel${{ contains(matrix.target, 'cuda') && '-cuda' || '' }}-${{ needs.resolve.outputs.ros_distro }}-${{ needs.resolve.outputs.version }}
+            *.args.UPSTREAM_RUN=ghcr.io/autowarefoundation/autoware:universe${{ contains(matrix.target, 'cuda') && '-cuda' || '' }}-${{ needs.resolve.outputs.ros_distro }}-${{ needs.resolve.outputs.version }}
+            *.tags=${{ env.IMAGE_PREFIX }}:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ needs.resolve.outputs.ros_distro }}-${{ needs.resolve.outputs.version }}
+
   create-manifests:
-    needs: [resolve, build-components]
+    needs: [resolve, build-components, build-components-cuda, build-universe]
     runs-on: ubuntu-22.04
     permissions:
       contents: read
@@ -106,10 +186,13 @@ jobs:
           image-prefix: ${{ env.IMAGE_PREFIX }}
           component-targets: >-
             sensing-perception
+            sensing-perception-cuda
             localization-mapping
             planning-control
             vehicle-system
             api
             visualizer
             simulator
+            universe
+            universe-cuda
           token: ${{ secrets.GITHUB_TOKEN }}
