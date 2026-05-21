@@ -1,0 +1,60 @@
+name: upstream-tag-watch
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+  actions: write       # repository_dispatch via gh api
+
+concurrency:
+  group: upstream-tag-watch
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ros-distro: [humble, jazzy]
+        flavor:    ['', '-cuda']
+    steps:
+      - name: Find latest unprocessed upstream tag
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISTRO:   ${{ matrix.ros-distro }}
+          FLAVOR:   ${{ matrix.flavor }}
+        run: |
+          set -euo pipefail
+          prefix="universe${FLAVOR}-${DISTRO}-"
+          tags=$(gh api -H "Accept: application/vnd.github+json" \
+            "/orgs/autowarefoundation/packages/container/autoware/versions?per_page=100" \
+            --jq '.[].metadata.container.tags[]' | sort -u)
+          candidate=$(echo "$tags" | grep -E "^${prefix}[0-9]+\.[0-9]+\.[0-9]+$" | sort -V | tail -n1 || true)
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+
+      - name: Lookup processed marker
+        id: cache
+        if: steps.find.outputs.candidate != ''
+        uses: actions/cache@v4
+        with:
+          path: .upstream-tag-marker
+          key:  upstream-tag-${{ steps.find.outputs.candidate }}
+
+      - name: Dispatch release if new
+        if: steps.find.outputs.candidate != '' && steps.cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG:      ${{ steps.find.outputs.candidate }}
+        run: |
+          mkdir -p .upstream-tag-marker && echo "$TAG" > .upstream-tag-marker/tag.txt
+          gh api \
+            -X POST \
+            "/repos/${GITHUB_REPOSITORY}/dispatches" \
+            -f event_type=upstream-tag-detected \
+            -F "client_payload[upstream_tag]=$TAG"
