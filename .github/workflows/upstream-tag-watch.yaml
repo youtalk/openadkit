@@ -52,7 +52,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG:      ${{ steps.find.outputs.candidate }}
         run: |
-          mkdir -p .upstream-tag-marker && echo "$TAG" > .upstream-tag-marker/tag.txt
+          set -euo pipefail
+          mkdir -p .upstream-tag-marker
+          echo "$TAG" > .upstream-tag-marker/tag.txt
           gh api \
             -X POST \
             "/repos/${GITHUB_REPOSITORY}/dispatches" \
