@@ -1,96 +1,48 @@
 name: combine-multi-arch-images
-description: Combine platform-specific Docker images into multi-arch manifests
-
+description: Combine per-arch tags into a single multi-arch manifest per component
 inputs:
-  ros-distro:
-    description: ROS distribution name
-    required: true
-  build-tag:
-    description: Immutable build tag for this workflow run
-    required: true
-  registry:
-    description: Container registry
-    required: true
-  image-prefix-common:
-    description: Image prefix for common images
-    required: true
-  image-prefix-component:
-    description: Image prefix for component images
-    required: true
-  component-targets:
-    description: 'Space-separated list of component and universe image targets (e.g., "sensing-perception localization-mapping universe")'
-    required: true
-  token:
-    description: GitHub token for registry access
-    required: true
-
+  ros-distro:        { required: true,  description: "ROS distribution name (humble|jazzy)" }
+  registry:          { required: true,  description: "Container registry host, e.g., ghcr.io" }
+  image-prefix:      { required: true,  description: "Full image prefix, e.g., ghcr.io/<owner>/openadkit" }
+  component-targets: { required: true,  description: "Whitespace-separated list of component target names" }
+  date:              { required: false, default: "",  description: "Optional dated suffix (YYYYMMDD)" }
+  version:           { required: false, default: "",  description: "Optional version suffix" }
+  token:             { required: true,  description: "GitHub token with packages:write" }
 runs:
   using: composite
   steps:
-    - name: Login to GitHub Container Registry
+    - name: Log in to ${{ inputs.registry }}
       uses: docker/login-action@v3
       with:
         registry: ${{ inputs.registry }}
         username: ${{ github.actor }}
         password: ${{ inputs.token }}
-
-    - name: Combine multi-arch images for common packages
-      run: |
-        set -e
-
-        IMAGE="${{ inputs.image-prefix-common }}"
-        DISTRO="${{ inputs.ros-distro }}"
-        BUILD_TAG="${{ inputs.build-tag }}"
-
-        # Known common image variants
-        MULTI_ARCH_VARIANTS="base devel"
-        CUDA_VARIANTS="base-cuda devel-cuda"
-
-        # Create multi-arch manifests (amd64 + arm64)
-        for variant in ${MULTI_ARCH_VARIANTS}; do
-          base_tag="${variant}-${DISTRO}-${BUILD_TAG}"
-          echo "Creating multi-arch manifest for ${IMAGE}:${base_tag}"
-          docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
-            "${IMAGE}:${variant}-amd64-${DISTRO}-${BUILD_TAG}" \
-            "${IMAGE}:${variant}-arm64-${DISTRO}-${BUILD_TAG}"
-          echo "Created ${IMAGE}:${base_tag}"
-        done
-
-        # Create single-arch aliases for CUDA (amd64-only)
-        for variant in ${CUDA_VARIANTS}; do
-          base_tag="${variant}-${DISTRO}-${BUILD_TAG}"
-          echo "Creating single-arch manifest for ${IMAGE}:${base_tag}"
-          docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
-            "${IMAGE}:${variant}-amd64-${DISTRO}-${BUILD_TAG}"
-          echo "Created ${IMAGE}:${base_tag}"
-        done
+    - name: Create multi-arch manifests
       shell: bash
-
-    - name: Combine multi-arch images for component packages
+      env:
+        DISTRO:  ${{ inputs.ros-distro }}
+        PREFIX:  ${{ inputs.image-prefix }}
+        DATE:    ${{ inputs.date }}
+        VERSION: ${{ inputs.version }}
+        TARGETS: ${{ inputs.component-targets }}
       run: |
-        set -e
-
-        IMAGE="${{ inputs.image-prefix-component }}"
-        DISTRO="${{ inputs.ros-distro }}"
-        BUILD_TAG="${{ inputs.build-tag }}"
-        TARGETS="${{ inputs.component-targets }}"
-
-        for target in ${TARGETS}; do
-          base_tag="${target}-${DISTRO}-${BUILD_TAG}"
-
-          if [[ "${target}" == *cuda* ]]; then
-            # CUDA: single-arch alias (amd64-only)
-            echo "Creating single-arch manifest for ${IMAGE}:${base_tag}"
-            docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
-              "${IMAGE}:${target}-amd64-${DISTRO}-${BUILD_TAG}"
-            echo "Created ${IMAGE}:${base_tag}"
-          else
-            # Multi-arch manifest (amd64 + arm64)
-            echo "Creating multi-arch manifest for ${IMAGE}:${base_tag}"
-            docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
-              "${IMAGE}:${target}-amd64-${DISTRO}-${BUILD_TAG}" \
-              "${IMAGE}:${target}-arm64-${DISTRO}-${BUILD_TAG}"
-            echo "Created ${IMAGE}:${base_tag}"
-          fi
+        set -euo pipefail
+        suffixes=("")                       # always produce the unsuffixed rolling tag
+        [ -n "$DATE" ]    && suffixes+=("$DATE")
+        [ -n "$VERSION" ] && suffixes+=("$VERSION")
+        for t in $TARGETS; do
+          for s in "${suffixes[@]}"; do
+            tag="${PREFIX}:${t}-${DISTRO}${s:+-$s}"
+            amd64="${PREFIX}:${t}-amd64-${DISTRO}${s:+-$s}"
+            arm64="${PREFIX}:${t}-arm64-${DISTRO}${s:+-$s}"
+            srcs=()
+            if docker manifest inspect "$amd64" >/dev/null 2>&1; then srcs+=("$amd64"); fi
+            if docker manifest inspect "$arm64" >/dev/null 2>&1; then srcs+=("$arm64"); fi
+            if [ ${#srcs[@]} -eq 0 ]; then
+              echo "::warning::No per-arch tags found for $tag — skipping"
+              continue
+            fi
+            echo "Creating $tag from: ${srcs[*]}"
+            docker buildx imagetools create -t "$tag" "${srcs[@]}"
+          done
         done
-      shell: bash

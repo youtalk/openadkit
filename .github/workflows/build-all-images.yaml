@@ -2,191 +2,41 @@ name: build-all-images
 
 on:
   push:
+    branches: [main]
     paths:
-      - 'components/docker-bake.hcl'
-      - 'components/common/**'
-      - 'components/sensing-perception/**'
-      - 'components/localization-mapping/**'
-      - 'components/planning-control/**'
-      - 'components/vehicle-system/**'
-      - 'components/api/**'
-      - 'components/visualizer/**'
-      - 'components/simulator/**'
-      - 'components/universe/**'
-  schedule:
-    - cron: '0 0 1 * *'
+      - 'docker/**'
+      - 'extras/**'
+      - 'scripts/build.sh'
+      - 'scripts/probe_upstream_cuda_arm64.sh'
+      - '.github/workflows/build-all-images.yaml'
+      - '.github/actions/combine-multi-arch-images/**'
+  pull_request:
+    paths:
+      - 'docker/**'
+      - 'extras/**'
+      - 'scripts/build.sh'
+      - 'scripts/probe_upstream_cuda_arm64.sh'
+      - '.github/workflows/build-all-images.yaml'
+      - '.github/actions/combine-multi-arch-images/**'
   workflow_dispatch:
 
-concurrency:
-  group: build-all-images-${{ github.ref }}
-  cancel-in-progress: true
-
 env:
-  REGISTRY: ghcr.io
-  IMAGE_PREFIX_COMMON: ghcr.io/${{ github.repository_owner }}/openadkit-common
-  IMAGE_PREFIX_COMPONENT: ghcr.io/${{ github.repository_owner }}/openadkit
-  BAKE_FILE: components/docker-bake.hcl
+  REGISTRY:     ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/openadkit
+  BAKE_FILE:    docker/bake.hcl
 
 jobs:
-  prepare:
+  date:
     runs-on: ubuntu-22.04
-    permissions:
-      contents: read
     outputs:
-      autoware_ref: ${{ steps.prepare.outputs.autoware_ref }}
-      build_tag: ${{ steps.prepare.outputs.build_tag }}
+      date: ${{ steps.d.outputs.date }}
     steps:
-      - name: Resolve shared build inputs
-        id: prepare
-        run: |
-          set -euo pipefail
-          autoware_ref=$(git ls-remote https://github.com/autowarefoundation/autoware refs/heads/main | cut -f1)
-          build_tag="$(date -u +'%Y%m%d')-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "autoware_ref=${autoware_ref}" >> "$GITHUB_OUTPUT"
-          echo "build_tag=${build_tag}" >> "$GITHUB_OUTPUT"
-        shell: bash
+      - id: d
+        run: echo "date=$(date +'%Y%m%d')" >> "$GITHUB_OUTPUT"
 
-  # =============================================================================
-  # Stage 1: Build common images
-  # =============================================================================
-  build-common:
-    needs: prepare
-    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
-    permissions:
-      contents: read
-      packages: write
-    strategy:
-      fail-fast: false
-      max-parallel: 8
-      matrix:
-        platform: [linux/amd64, linux/arm64]
-        ros-distro: [humble, jazzy]
-    steps:
-      - name: Install jq and vcs2l
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq pipx
-          pipx install vcs2l
-        shell: bash
-
-      - name: Checkout OpenADKit repository
-        uses: actions/checkout@v6
-
-      - name: Checkout Autoware repository
-        uses: actions/checkout@v6
-        with:
-          repository: autowarefoundation/autoware
-          ref: ${{ needs.prepare.outputs.autoware_ref }}
-          path: autoware
-          fetch-depth: 1
-
-      - name: Pull Autoware Source
-        run: |
-            mkdir -p autoware/src
-            vcs import --shallow autoware/src < autoware/repositories/autoware.repos
-        shell: bash
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata for openadkit-common:base
-        id: meta-common-base
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_PREFIX_COMMON }}
-          bake-target: docker-metadata-action-common-base
-          tags: |
-            type=raw,value=base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-          flavor: |
-            latest=false
-
-      - name: Extract metadata for openadkit-common:base-cuda
-        id: meta-common-base-cuda
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_PREFIX_COMMON }}
-          bake-target: docker-metadata-action-common-base-cuda
-          tags: |
-            type=raw,value=base-cuda-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=base-cuda-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-          flavor: |
-            latest=false
-
-      - name: Extract metadata for openadkit-common:devel
-        id: meta-common-devel
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_PREFIX_COMMON }}
-          bake-target: docker-metadata-action-common-devel
-          tags: |
-            type=raw,value=devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-          flavor: |
-            latest=false
-
-      - name: Extract metadata for openadkit-common:devel-cuda
-        id: meta-common-devel-cuda
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_PREFIX_COMMON }}
-          bake-target: docker-metadata-action-common-devel-cuda
-          tags: |
-            type=raw,value=devel-cuda-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=devel-cuda-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-          flavor: |
-            latest=false
-
-      - name: Build and push common images (non-CUDA)
-        uses: docker/bake-action@v5
-        with:
-          files: |
-            ${{ env.BAKE_FILE }}
-            ${{ steps.meta-common-base.outputs.bake-file }}
-            ${{ steps.meta-common-devel.outputs.bake-file }}
-          targets: |
-            common-base
-            common-devel
-          push: true
-          set: |
-            *.platform=${{ matrix.platform }}
-            *.args.ROS_DISTRO=${{ matrix.ros-distro }}
-            *.args.BASE_IMAGE=ros:${{ matrix.ros-distro }}-ros-base-${{ matrix.ros-distro == 'jazzy' && 'noble' || 'jammy' }}
-            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:common-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main
-            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:common-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main,mode=max
-
-      - name: Build and push common images (CUDA, amd64 only)
-        if: matrix.platform == 'linux/amd64'
-        uses: docker/bake-action@v5
-        with:
-          files: |
-            ${{ env.BAKE_FILE }}
-            ${{ steps.meta-common-base-cuda.outputs.bake-file }}
-            ${{ steps.meta-common-devel-cuda.outputs.bake-file }}
-          targets: |
-            common-base-cuda
-            common-devel-cuda
-          push: true
-          set: |
-            *.platform=${{ matrix.platform }}
-            *.args.ROS_DISTRO=${{ matrix.ros-distro }}
-            *.args.BASE_IMAGE=ros:${{ matrix.ros-distro }}-ros-base-${{ matrix.ros-distro == 'jazzy' && 'noble' || 'jammy' }}
-            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:common-cuda-${{ matrix.ros-distro }}-main
-            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:common-cuda-${{ matrix.ros-distro }}-main,mode=max
-
-  # =============================================================================
-  # Stage 2: Build component images (parallel)
-  # =============================================================================
   build-components:
+    needs: [date]
     runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
-    needs: [prepare, build-common]
     permissions:
       contents: read
       packages: write
@@ -194,7 +44,7 @@ jobs:
       fail-fast: false
       max-parallel: 8
       matrix:
-        platform: [linux/amd64, linux/arm64]
+        platform:  [linux/amd64, linux/arm64]
         ros-distro: [humble, jazzy]
         target:
           - sensing-perception
@@ -204,97 +54,89 @@ jobs:
           - api
           - visualizer
           - simulator
-        include:
-          # CUDA variant only on amd64
-          - platform: linux/amd64
-            ros-distro: humble
-            target: sensing-perception-cuda
-          - platform: linux/amd64
-            ros-distro: jazzy
-            target: sensing-perception-cuda
     steps:
-      - name: Install jq and vcs2l
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq pipx
-          pipx install vcs2l
-        shell: bash
-
-      - name: Checkout OpenADKit repository
-        uses: actions/checkout@v6
-
-      - name: Checkout Autoware repository
-        uses: actions/checkout@v6
-        with:
-          repository: autowarefoundation/autoware
-          ref: ${{ needs.prepare.outputs.autoware_ref }}
-          path: autoware
-          fetch-depth: 1
-
-      - name: Pull Autoware Source
-        run: |
-            mkdir -p autoware/src
-            vcs import --shallow autoware/src < autoware/repositories/autoware.repos
-        shell: bash
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata for ${{ matrix.target }}
-        id: meta
-        uses: docker/metadata-action@v5
+      - uses: docker/bake-action@v5
         with:
-          images: ${{ env.IMAGE_PREFIX_COMPONENT }}
-          bake-target: docker-metadata-action-${{ matrix.target }}
-          tags: |
-            type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-          flavor: |
-            latest=false
-
-      - name: Build and push ${{ matrix.target }}
-        uses: docker/bake-action@v5
-        with:
-          files: |
-            ${{ env.BAKE_FILE }}
-            ${{ steps.meta.outputs.bake-file }}
+          files: ${{ env.BAKE_FILE }}
           targets: ${{ matrix.target }}
           push: true
           set: |
             *.platform=${{ matrix.platform }}
             *.args.ROS_DISTRO=${{ matrix.ros-distro }}
-            *.args.COMMON_BASE_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.COMMON_BASE_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.COMMON_DEVEL_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.COMMON_DEVEL_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
+            *.args.UPSTREAM_DEVEL=ghcr.io/autowarefoundation/autoware:universe-devel-${{ matrix.ros-distro }}
+            *.args.UPSTREAM_RUN=ghcr.io/autowarefoundation/autoware:universe-${{ matrix.ros-distro }}
+            *.tags=${{ env.IMAGE_PREFIX }}:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}
+            *.tags=${{ env.IMAGE_PREFIX }}:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.date.outputs.date }}
             *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main
             *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main,mode=max
 
-  # =============================================================================
-  # Stage 3: Build universe and universe-cuda images (parallel)
-  # =============================================================================
-  build-universe:
+  build-components-cuda:
+    needs: [date]
     runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
-    needs: [prepare, build-common, build-components]
     permissions:
       contents: read
       packages: write
     strategy:
       fail-fast: false
-      max-parallel: 8
       matrix:
+        ros-distro: [humble, jazzy]
+        target: [sensing-perception-cuda]
         platform: [linux/amd64, linux/arm64]
+    steps:
+      - uses: actions/checkout@v6
+      - id: probe
+        if: matrix.platform == 'linux/arm64'
+        env:
+          DISTRO: ${{ matrix.ros-distro }}
+        run: |
+          arm=$(./scripts/probe_upstream_cuda_arm64.sh "$DISTRO")
+          echo "should_build=$arm" >> "$GITHUB_OUTPUT"
+      - if: matrix.platform == 'linux/amd64' || steps.probe.outputs.should_build == 'true'
+        uses: docker/setup-buildx-action@v3
+      - if: matrix.platform == 'linux/amd64' || steps.probe.outputs.should_build == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - if: matrix.platform == 'linux/amd64' || steps.probe.outputs.should_build == 'true'
+        uses: docker/bake-action@v5
+        with:
+          files: ${{ env.BAKE_FILE }}
+          targets: ${{ matrix.target }}
+          push: true
+          set: |
+            *.platform=${{ matrix.platform }}
+            *.args.ROS_DISTRO=${{ matrix.ros-distro }}
+            *.args.UPSTREAM_DEVEL=ghcr.io/autowarefoundation/autoware:universe-devel-cuda-${{ matrix.ros-distro }}
+            *.args.UPSTREAM_RUN=ghcr.io/autowarefoundation/autoware:universe-cuda-${{ matrix.ros-distro }}
+            *.tags=${{ env.IMAGE_PREFIX }}:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}
+            *.tags=${{ env.IMAGE_PREFIX }}:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.date.outputs.date }}
+            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main
+            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main,mode=max
+      - if: matrix.platform == 'linux/arm64' && steps.probe.outputs.should_build != 'true'
+        run: echo "::warning::Skipping ${{ matrix.target }} on arm64; upstream universe-cuda-${{ matrix.ros-distro }} has no arm64 layer yet"
+
+  build-universe:
+    needs: [date, build-components, build-components-cuda]
+    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:  [linux/amd64, linux/arm64]
         ros-distro: [humble, jazzy]
         target: [universe]
         include:
-          # CUDA variant only on amd64
           - platform: linux/amd64
             ros-distro: humble
             target: universe-cuda
@@ -302,87 +144,29 @@ jobs:
             ros-distro: jazzy
             target: universe-cuda
     steps:
-      - name: Checkout OpenADKit repository
-        uses: actions/checkout@v6
-
-      - name: Free Disk Space (Ubuntu)
-        uses: ./.github/actions/free-disk-space
-
-      - name: Install jq and vcs2l
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq pipx
-          pipx install vcs2l
-        shell: bash
-
-      - name: Checkout Autoware repository
-        uses: actions/checkout@v6
-        with:
-          repository: autowarefoundation/autoware
-          ref: ${{ needs.prepare.outputs.autoware_ref }}
-          path: autoware
-          fetch-depth: 1
-
-      - name: Pull Autoware Source
-        run: |
-            mkdir -p autoware/src
-            vcs import --shallow autoware/src < autoware/repositories/autoware.repos
-        shell: bash
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Container Registry
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Extract metadata for ${{ matrix.target }}
-        id: meta
-        uses: docker/metadata-action@v5
+      - uses: docker/bake-action@v5
         with:
-          images: ${{ env.IMAGE_PREFIX_COMPONENT }}
-          bake-target: docker-metadata-action-${{ matrix.target }}
-          tags: |
-            type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }},enable={{is_default_branch}}
-            type=raw,value=${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-          flavor: |
-            latest=false
-
-      - name: Build and push ${{ matrix.target }}
-        uses: docker/bake-action@v5
-        with:
-          files: |
-            ${{ env.BAKE_FILE }}
-            ${{ steps.meta.outputs.bake-file }}
+          files: ${{ env.BAKE_FILE }}
           targets: ${{ matrix.target }}
           push: true
           set: |
             *.platform=${{ matrix.platform }}
             *.args.ROS_DISTRO=${{ matrix.ros-distro }}
-            *.args.COMMON_BASE_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.COMMON_BASE_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:base-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.COMMON_DEVEL_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.COMMON_DEVEL_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMMON }}:devel-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.SENSING_PERCEPTION_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.SENSING_PERCEPTION_CUDA_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.LOCALIZATION_MAPPING_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:localization-mapping-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.PLANNING_CONTROL_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:planning-control-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.VEHICLE_SYSTEM_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:vehicle-system-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.API_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:api-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.VISUALIZER_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:visualizer-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.args.SIMULATOR_IMAGE=${{ env.IMAGE_PREFIX_COMPONENT }}:simulator-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
-            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main
-            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main,mode=max
+            *.args.UPSTREAM_DEVEL=ghcr.io/autowarefoundation/autoware:universe-devel${{ contains(matrix.target, 'cuda') && '-cuda' || '' }}-${{ matrix.ros-distro }}
+            *.args.UPSTREAM_RUN=ghcr.io/autowarefoundation/autoware:universe${{ contains(matrix.target, 'cuda') && '-cuda' || '' }}-${{ matrix.ros-distro }}
+            *.tags=${{ env.IMAGE_PREFIX }}:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}
+            *.tags=${{ env.IMAGE_PREFIX }}:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.date.outputs.date }}
 
-  # =============================================================================
-  # Stage 4: Create multi-arch manifests
-  # =============================================================================
   create-manifests:
+    needs: [date, build-components, build-components-cuda, build-universe]
     runs-on: ubuntu-22.04
-    needs: [prepare, build-common, build-components, build-universe]
     permissions:
       contents: read
       packages: write
@@ -391,20 +175,14 @@ jobs:
       matrix:
         ros-distro: [humble, jazzy]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Combine multi-arch images
-        uses: ./.github/actions/combine-multi-arch-images
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v3
+      - uses: ./.github/actions/combine-multi-arch-images
         with:
-          ros-distro: ${{ matrix.ros-distro }}
-          build-tag: ${{ needs.prepare.outputs.build_tag }}
-          registry: ${{ env.REGISTRY }}
-          image-prefix-common: ${{ env.IMAGE_PREFIX_COMMON }}
-          image-prefix-component: ${{ env.IMAGE_PREFIX_COMPONENT }}
+          ros-distro:   ${{ matrix.ros-distro }}
+          date:         ${{ needs.date.outputs.date }}
+          registry:     ${{ env.REGISTRY }}
+          image-prefix: ${{ env.IMAGE_PREFIX }}
           component-targets: >-
             sensing-perception
             sensing-perception-cuda
@@ -417,3 +195,29 @@ jobs:
             universe
             universe-cuda
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  verify-multi-arch:
+    needs: [date, create-manifests]
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        ros-distro: [humble, jazzy]
+        target:
+          - sensing-perception
+          - localization-mapping
+          - planning-control
+          - vehicle-system
+          - api
+          - visualizer
+          - simulator
+          - universe
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - name: Assert multi-arch manifest contains amd64 and arm64
+        env:
+          IMAGE: ${{ env.IMAGE_PREFIX }}:${{ matrix.target }}-${{ matrix.ros-distro }}-${{ needs.date.outputs.date }}
+        run: |
+          out=$(docker buildx imagetools inspect "$IMAGE" --raw)
+          echo "$out" | jq -e '.manifests[] | select(.platform.architecture=="amd64")' > /dev/null
+          echo "$out" | jq -e '.manifests[] | select(.platform.architecture=="arm64")' > /dev/null
