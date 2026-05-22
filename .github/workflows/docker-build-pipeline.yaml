@@ -1,0 +1,84 @@
+# Reusable workflow: the five-stage build chain for one (ROS distro, arch).
+#   universe-common → components → universe
+#                   → components-cuda → universe-cuda
+# The two *-cuda legs are amd64-only (openadkit policy).
+
+name: docker-build-pipeline
+
+on:
+  workflow_call:
+    inputs:
+      ros-distro:
+        description: ROS distribution
+        type: string
+        required: true
+      platform:
+        description: Target platform (amd64 or arm64)
+        type: string
+        required: true
+      target-image:
+        description: Registry image name
+        type: string
+        default: openadkit
+
+jobs:
+  build-universe-common:
+    uses: ./.github/workflows/docker-build.yaml
+    with:
+      bake-group: ci-universe-common
+      platform: ${{ inputs.platform }}
+      ros-distro: ${{ inputs.ros-distro }}
+      target-image: ${{ inputs.target-image }}
+      needs-source: true
+      free-disk-space: true
+      ensure-upstream: true
+
+  build-components:
+    needs: build-universe-common
+    uses: ./.github/workflows/docker-build.yaml
+    with:
+      bake-group: ci-components
+      platform: ${{ inputs.platform }}
+      ros-distro: ${{ inputs.ros-distro }}
+      target-image: ${{ inputs.target-image }}
+      needs-source: true
+      free-disk-space: true
+      ensure-upstream: true
+
+  build-components-cuda:
+    needs: build-universe-common
+    if: inputs.platform == 'amd64'
+    uses: ./.github/workflows/docker-build.yaml
+    with:
+      bake-group: ci-components-cuda
+      platform: ${{ inputs.platform }}
+      ros-distro: ${{ inputs.ros-distro }}
+      target-image: ${{ inputs.target-image }}
+      needs-source: true
+      free-disk-space: true
+      ensure-upstream: true
+
+  build-universe:
+    needs: build-components
+    uses: ./.github/workflows/docker-build.yaml
+    with:
+      bake-group: ci-universe
+      platform: ${{ inputs.platform }}
+      ros-distro: ${{ inputs.ros-distro }}
+      target-image: ${{ inputs.target-image }}
+      needs-source: true
+      free-disk-space: true
+      ensure-upstream: true
+
+  build-universe-cuda:
+    needs: [build-components, build-components-cuda]
+    if: inputs.platform == 'amd64'
+    uses: ./.github/workflows/docker-build.yaml
+    with:
+      bake-group: ci-universe-cuda
+      platform: ${{ inputs.platform }}
+      ros-distro: ${{ inputs.ros-distro }}
+      target-image: ${{ inputs.target-image }}
+      needs-source: true
+      free-disk-space: true
+      ensure-upstream: true
