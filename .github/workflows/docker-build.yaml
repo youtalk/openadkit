@@ -122,18 +122,6 @@ jobs:
           done <<< "${refs}"
           [ "${fail}" -eq 0 ]
 
-      - name: 🏷️ Compute target tags from HCL
-        id: compute-tags
-        run: |
-          targets=$(docker buildx bake -f docker/docker-bake.hcl --print ${{ inputs.bake-group }} 2>/dev/null \
-            | jq -r '.group."${{ inputs.bake-group }}".targets[]')
-          tags=""
-          for t in ${targets}; do
-            tags="${tags:+${tags} }${t}-${{ inputs.ros-distro }}"
-          done
-          echo "tags=${tags}" >> "$GITHUB_OUTPUT"
-          echo "::notice::Target tags: ${tags}"
-
       - name: 💾 Restore BuildKit cache mounts
         id: cache-restore
         uses: actions/cache/restore@v5
