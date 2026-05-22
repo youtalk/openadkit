@@ -41,3 +41,56 @@ The API component is responsible for providing [AD API](https://autowarefoundati
 ### System
 
 The system component is responsible for managing the vehicle's system. System component can be configured to use a variety of system algorithms, including **system health monitoring and system error handling**.
+
+## Building from source
+
+Open AD Kit images are built with `docker buildx bake` using
+[`docker/docker-bake.hcl`](https://github.com/autowarefoundation/openadkit/blob/main/docker/docker-bake.hcl).
+The build graph is:
+
+```
+upstream autoware:core-devel / core / base-cuda-{devel,runtime}
+        │
+        ▼
+universe-common  (openadkit-owned thin intermediate)
+        │
+        ▼
+seven component images (sensing-perception, localization-mapping,
+planning-control, vehicle-system, api, visualizer, simulator) + sensing-perception-cuda
+        │
+        ▼
+universe / universe-cuda
+```
+
+The `universe-common` layer compiles only the universe-common slice of
+Autoware on top of upstream `core-devel`/`core`; everything below
+`universe-common` (base OS, ROS, core) is owned and built by upstream.
+
+### Bake groups
+
+| Group | Targets |
+|-------|---------|
+| `universe-common` | `universe-common-devel`, `universe-common` |
+| `components` | the seven non-CUDA component images |
+| `components-cuda` | `sensing-perception-cuda` |
+| `universe` / `universe-cuda` | the aggregated images |
+
+### Upstream pin
+
+The `UPSTREAM_TAG` bake variable pins the upstream Autoware release the
+images are built against. CI sets it from a repository Variable; leaving it
+empty uses upstream's plain `<name>-<distro>` multi-arch tag.
+
+## CI pipeline
+
+`docker-build-and-push.yaml` is the entrypoint. On pushes to `main` (and on
+release tags) it runs a changed-files gate, then fans out into a
+per-`(distro, arch)` five-stage pipeline (`docker-build-pipeline.yaml`),
+where each stage builds one bake-group via `docker-build.yaml`. After both
+architectures finish, `docker-manifest.yaml` stitches the per-arch tags into
+multi-arch manifests.
+
+The Jazzy manifest job additionally publishes no-distro-suffix alias tags
+(`openadkit:<name>`), so existing `ghcr.io/autowarefoundation/openadkit:<name>`
+references resolve to the Jazzy multi-arch image. Humble consumers must use
+the explicit `-humble` suffix.

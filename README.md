@@ -66,3 +66,40 @@ Open AD Kit envisions an always connected, complete autonomous driving developme
 - **Continuous testing** in containerized environments
 
 ![Connected and Continuous](docs/assets/images/connected-continuous.png)
+
+## Building images locally
+
+Open AD Kit images are built with `docker buildx bake`, driven by
+[`docker/docker-bake.hcl`](docker/docker-bake.hcl). The component images sit
+on top of upstream Autoware base images published to
+`ghcr.io/autowarefoundation/autoware`.
+
+First prepare the Autoware colcon workspace (the same step CI runs):
+
+```bash
+pipx install vcs2l
+git clone --depth 1 https://github.com/autowarefoundation/autoware.git
+mkdir -p autoware/src
+vcs import --shallow autoware/src < autoware/repositories/autoware.repos
+```
+
+Then build:
+
+```bash
+# Build everything (default group)
+docker buildx bake -f docker/docker-bake.hcl
+
+# Build a single target
+docker buildx bake -f docker/docker-bake.hcl universe
+
+# Build just the non-CUDA component images
+docker buildx bake -f docker/docker-bake.hcl components
+
+# Override ROS distro / platform / upstream pin
+ROS_DISTRO=humble UPSTREAM_TAG=1.2.3 \
+  docker buildx bake -f docker/docker-bake.hcl \
+  --set "*.platform=linux/arm64" universe
+```
+
+See the [components documentation](https://autowarefoundation.github.io/openadkit/components/)
+for the full bake-group structure and CI pipeline details.
