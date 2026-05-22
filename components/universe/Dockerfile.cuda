@@ -11,13 +11,16 @@ ARG ROS_DISTRO
 
 USER root
 COPY --from=autoware-core           /opt/autoware /opt/autoware
-COPY --from=sensing-perception-cuda /opt/autoware /opt/autoware
+# sensing-perception-cuda is copied LAST so its CUDA-compiled binaries
+# (autoware_tensorrt_common, autoware_tensorrt_plugins, etc.) win over the
+# non-CUDA versions that planning-control and simulator also build.
 COPY --from=localization-mapping    /opt/autoware /opt/autoware
 COPY --from=planning-control        /opt/autoware /opt/autoware
 COPY --from=vehicle-system          /opt/autoware /opt/autoware
 COPY --from=api                     /opt/autoware /opt/autoware
 COPY --from=visualizer              /opt/autoware /opt/autoware
 COPY --from=simulator               /opt/autoware /opt/autoware
+COPY --from=sensing-perception-cuda /opt/autoware /opt/autoware
 RUN find /opt/autoware -name '*.so' -exec strip --strip-unneeded {} +
 
 USER ${USERNAME}
