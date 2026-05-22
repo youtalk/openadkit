@@ -55,12 +55,18 @@ upstream autoware:core-devel / core / base-cuda-{devel,runtime}
 universe-common  (openadkit-owned thin intermediate)
         │
         ▼
-seven component images (sensing-perception, localization-mapping,
-planning-control, vehicle-system, api, visualizer, simulator) + sensing-perception-cuda
+seven non-CUDA component images (sensing-perception,
+localization-mapping, planning-control, vehicle-system,
+api, visualizer, simulator)
         │
         ▼
 universe / universe-cuda
 ```
+
+`sensing-perception-cuda` is a parallel CUDA branch: it inherits from
+upstream `base-cuda-{devel,runtime}` and additionally grafts in the
+`universe-common` install tree (so it has both CUDA toolkit access and the
+universe-common compiled packages).
 
 The `universe-common` layer compiles only the universe-common slice of
 Autoware on top of upstream `core-devel`/`core`; everything below

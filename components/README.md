@@ -36,6 +36,7 @@ block-beta
     UC --> VIZ
     UC --> SIM
     UP --> SPC
+    UC --> SPC
     SP --> UNI
     SPC --> UNI
     LM --> UNI
