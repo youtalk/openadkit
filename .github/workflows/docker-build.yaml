@@ -48,10 +48,16 @@ on:
 jobs:
   build:
     name: ${{ inputs.bake-group }}
+    # Route youtalk/openadkit (the experimentation fork) to Ubicloud 16-vcpu
+    # runners; every other repository — notably autowarefoundation/openadkit
+    # once this lands upstream — uses the GitHub-hosted defaults.
+    # repository_owner is more robust than github.actor: it survives non-youtalk
+    # pushers (dependabot, collaborators) and never accidentally routes pushes
+    # from a `youtalk` actor on the upstream repo onto self-hosted runners.
     runs-on: >-
       ${{ inputs.platform == 'amd64'
-          && (github.actor == 'youtalk' && 'ubicloud-standard-16' || 'ubuntu-24.04')
-          || (github.actor == 'youtalk' && 'ubicloud-standard-16-arm' || 'ubuntu-24.04-arm') }}
+          && (github.repository_owner == 'youtalk' && 'ubicloud-standard-16' || 'ubuntu-24.04')
+          || (github.repository_owner == 'youtalk' && 'ubicloud-standard-16-arm' || 'ubuntu-24.04-arm') }}
     permissions:
       contents: read
       packages: write
