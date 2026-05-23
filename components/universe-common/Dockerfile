@@ -83,10 +83,24 @@ USER root
 COPY --from=universe-common-devel /opt/autoware /opt/autoware
 RUN find /opt/autoware -name '*.so' -exec strip --strip-unneeded {} +
 
+# The external glob is enumerated (not `external/**`) to match the devel
+# stage exactly: a broad `universe/external/**/package.xml` pulls in
+# component-owned externals (trt_batched_nms, bevdet_vendor, cuda_blackboard,
+# negotiated — all in the sensing-perception slice) whose exec_depend keys
+# (autoware_tensorrt_common etc.) live outside universe-common and cannot be
+# resolved here.
 COPY --parents --chown=${USERNAME}:${USERNAME} \
     autoware/src/universe/autoware_universe/common/**/package.xml \
     autoware/src/universe/autoware_universe/evaluator/**/package.xml \
-    autoware/src/universe/external/**/package.xml \
+    autoware/src/universe/external/eagleye/**/package.xml \
+    autoware/src/universe/external/glog/**/package.xml \
+    autoware/src/universe/external/llh_converter/**/package.xml \
+    autoware/src/universe/external/managed_transform_buffer/**/package.xml \
+    autoware/src/universe/external/morai_msgs/**/package.xml \
+    autoware/src/universe/external/muSSP/**/package.xml \
+    autoware/src/universe/external/pointcloud_to_laserscan/**/package.xml \
+    autoware/src/universe/external/rtklib_ros_bridge/**/package.xml \
+    autoware/src/universe/external/tier4_autoware_msgs/**/package.xml \
     autoware/src/middleware/external/**/package.xml \
     /tmp/
 
