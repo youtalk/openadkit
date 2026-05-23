@@ -114,31 +114,36 @@ group "ci-universe-cuda" {
   targets = ["universe-cuda"]
 }
 
-target "universe-common-devel" {
+// Common base for both universe-common stages. The Dockerfile has FROM lines
+// for both ${CORE_DEVEL_IMAGE} (devel stage) and ${CORE_IMAGE} (runtime
+// stage), so BuildKit needs both ARGs and both contexts resolved at parse
+// time regardless of which target stage is being built — mirrors upstream's
+// `_universe-base` / `_universe-cuda-base` inheritable pattern.
+target "_universe-common-base" {
   dockerfile = "components/universe-common/Dockerfile"
-  target     = "universe-common-devel"
-  tags       = tags("universe-common-devel")
   contexts = {
     autoware-core-devel = upstream("core-devel")
+    autoware-core       = upstream("core")
   }
   args = {
     CORE_DEVEL_IMAGE = "autoware-core-devel"
+    CORE_IMAGE       = "autoware-core"
     ROS_DISTRO       = ROS_DISTRO
   }
 }
 
+target "universe-common-devel" {
+  inherits = ["_universe-common-base"]
+  target   = "universe-common-devel"
+  tags     = tags("universe-common-devel")
+}
+
 target "universe-common" {
-  dockerfile = "components/universe-common/Dockerfile"
-  target     = "universe-common"
-  tags       = tags("universe-common")
+  inherits = ["_universe-common-base"]
+  target   = "universe-common"
+  tags     = tags("universe-common")
   contexts = {
-    autoware-core         = upstream("core")
     universe-common-devel = ctx("universe-common-devel")
-  }
-  args = {
-    CORE_IMAGE                  = "autoware-core"
-    UNIVERSE_COMMON_DEVEL_IMAGE = "universe-common-devel"
-    ROS_DISTRO                  = ROS_DISTRO
   }
 }
 
