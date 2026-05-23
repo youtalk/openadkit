@@ -25,7 +25,6 @@ COPY --parents --chown=${USERNAME}:${USERNAME} \
     autoware/src/universe/external/rtklib_ros_bridge/**/package.xml \
     autoware/src/universe/external/tier4_autoware_msgs/**/package.xml \
     autoware/src/middleware/external/**/package.xml \
-    autoware/src/launcher/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
@@ -58,7 +57,6 @@ RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
         /tmp/autoware/src/universe/external/rtklib_ros_bridge \
         /tmp/autoware/src/universe/external/tier4_autoware_msgs \
         /tmp/autoware/src/middleware/external \
-        /tmp/autoware/src/launcher \
       --install-base /opt/autoware \
       --cmake-args -DCMAKE_BUILD_TYPE=Release && \
     rm -rf build log
@@ -90,7 +88,6 @@ COPY --parents --chown=${USERNAME}:${USERNAME} \
     autoware/src/universe/autoware_universe/evaluator/**/package.xml \
     autoware/src/universe/external/**/package.xml \
     autoware/src/middleware/external/**/package.xml \
-    autoware/src/launcher/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
