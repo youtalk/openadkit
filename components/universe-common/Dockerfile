@@ -11,8 +11,6 @@ FROM ${CORE_DEVEL_IMAGE} AS universe-common-devel
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ROS_DISTRO
 
-USER ${USERNAME}
-
 # rosdep install for the universe-common slice (build/test deps).
 COPY --parents --chown=${USERNAME}:${USERNAME} \
     autoware/src/universe/autoware_universe/common/**/package.xml \
@@ -32,7 +30,7 @@ COPY --parents --chown=${USERNAME}:${USERNAME} \
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
-    sudo apt-get update && \
+    apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     . /opt/autoware/setup.sh && \
     rosdep install -y --from-paths /tmp/autoware/src \
@@ -68,7 +66,7 @@ RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
 # Exec-only rosdep for the universe-common slice.
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
-    sudo apt-get update && \
+    apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     rosdep install -y --from-paths /tmp/autoware/src \
       --ignore-src --rosdistro "${ROS_DISTRO}" \
@@ -87,7 +85,6 @@ USER root
 COPY --from=universe-common-devel /opt/autoware /opt/autoware
 RUN find /opt/autoware -name '*.so' -exec strip --strip-unneeded {} +
 
-USER ${USERNAME}
 COPY --parents --chown=${USERNAME}:${USERNAME} \
     autoware/src/universe/autoware_universe/common/**/package.xml \
     autoware/src/universe/autoware_universe/evaluator/**/package.xml \
@@ -98,7 +95,7 @@ COPY --parents --chown=${USERNAME}:${USERNAME} \
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
-    sudo apt-get update && \
+    apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     rosdep install -y --from-paths /tmp \
       --dependency-types=exec --ignore-src --rosdistro "${ROS_DISTRO}" && \

@@ -10,8 +10,6 @@ FROM ${UNIVERSE_COMMON_DEVEL_IMAGE} AS planning-control-devel
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ROS_DISTRO
 
-USER ${USERNAME}
-
 # autoware_pcl_extensions / autoware_pointcloud_preprocessor / autoware_cuda_utils /
 # autoware_tensorrt_common / autoware_tensorrt_plugins / autoware_external_cmd_converter /
 # autoware_raw_vehicle_cmd_converter / autoware_command_mode_types are pulled in until
@@ -33,7 +31,7 @@ COPY --parents --chown=${USERNAME}:${USERNAME} \
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
-    sudo apt-get update && \
+    apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     . /opt/autoware/setup.sh && \
     rosdep install -y --from-paths /tmp/autoware/src \
@@ -66,7 +64,7 @@ RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
-    sudo apt-get update && \
+    apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     rosdep install -y --from-paths /tmp/autoware/src \
       --ignore-src --rosdistro "${ROS_DISTRO}" \
@@ -84,7 +82,6 @@ USER root
 COPY --from=planning-control-devel /opt/autoware /opt/autoware
 RUN find /opt/autoware -name '*.so' -exec strip --strip-unneeded {} +
 
-USER ${USERNAME}
 COPY --parents --chown=${USERNAME}:${USERNAME} \
     autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_control_launch/**/package.xml \
     autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_planning_launch/**/package.xml \
@@ -102,7 +99,7 @@ COPY --parents --chown=${USERNAME}:${USERNAME} \
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
-    sudo apt-get update && \
+    apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     rosdep install -y --from-paths /tmp \
       --dependency-types=exec --ignore-src --rosdistro "${ROS_DISTRO}" && \
