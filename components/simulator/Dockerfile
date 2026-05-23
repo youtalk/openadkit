@@ -11,19 +11,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ROS_DISTRO
 
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_simulator_launch/**/package.xml \
-    autoware/src/universe/autoware_universe/simulator/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_shape_estimation/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_multi_object_tracker/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_elevation_map_loader/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_detected_object_feature_remover/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_tensorrt_common/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_probabilistic_occupancy_grid_map/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_map_based_prediction/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_cuda_utils/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pointcloud_preprocessor/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pcl_extensions/**/package.xml \
-    autoware/src/universe/autoware_universe/vehicle/autoware_raw_vehicle_cmd_converter/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
@@ -81,19 +69,7 @@ COPY --from=simulator-devel /opt/autoware /opt/autoware
 RUN find /opt/autoware -name '*.so' -exec strip --strip-unneeded {} +
 
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_simulator_launch/**/package.xml \
-    autoware/src/universe/autoware_universe/simulator/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_shape_estimation/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_multi_object_tracker/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_elevation_map_loader/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_detected_object_feature_remover/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_tensorrt_common/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_probabilistic_occupancy_grid_map/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_map_based_prediction/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_cuda_utils/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pointcloud_preprocessor/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pcl_extensions/**/package.xml \
-    autoware/src/universe/autoware_universe/vehicle/autoware_raw_vehicle_cmd_converter/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \

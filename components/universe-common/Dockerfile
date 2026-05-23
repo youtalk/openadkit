@@ -12,22 +12,12 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ROS_DISTRO
 
 # rosdep install for the universe-common slice (build/test deps).
+# Broad glob so rosdep sees all universe packages as local via --ignore-src,
+# preventing cross-component exec_depend failures (e.g. simulator referencing
+# planning-control packages). colcon build is still scoped by --base-paths below.
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/universe/autoware_universe/common/**/package.xml \
-    autoware/src/universe/autoware_universe/evaluator/**/package.xml \
-    autoware/src/universe/external/eagleye/**/package.xml \
-    autoware/src/universe/external/glog/**/package.xml \
-    autoware/src/universe/external/llh_converter/**/package.xml \
-    autoware/src/universe/external/managed_transform_buffer/**/package.xml \
-    autoware/src/universe/external/morai_msgs/**/package.xml \
-    autoware/src/universe/external/muSSP/**/package.xml \
-    autoware/src/universe/external/pointcloud_to_laserscan/**/package.xml \
-    autoware/src/universe/external/rtklib_ros_bridge/**/package.xml \
-    autoware/src/universe/external/tier4_autoware_msgs/**/package.xml \
-    autoware/src/middleware/external/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
-
-# /opt/autoware is added to --from-paths so rosdep treats packages already installed by upstream core-devel (and our own universe-common build) as local — --ignore-src skips them and their package.xml is scanned for transitive deps (e.g. geographic_msgs via autoware_lanelet2_extension).
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
@@ -110,25 +100,8 @@ ENV CMAKE_PREFIX_PATH="/opt/acados${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}"
 ENV ACADOS_SOURCE_DIR="/opt/acados"
 ENV LD_LIBRARY_PATH="/opt/acados/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-# The external glob is enumerated (not `external/**`) to match the devel
-# stage exactly: a broad `universe/external/**/package.xml` pulls in
-# component-owned externals (trt_batched_nms, bevdet_vendor, cuda_blackboard,
-# negotiated — all in the sensing-perception slice) whose exec_depend keys
-# (autoware_tensorrt_common etc.) live outside universe-common and cannot be
-# resolved here.
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/universe/autoware_universe/common/**/package.xml \
-    autoware/src/universe/autoware_universe/evaluator/**/package.xml \
-    autoware/src/universe/external/eagleye/**/package.xml \
-    autoware/src/universe/external/glog/**/package.xml \
-    autoware/src/universe/external/llh_converter/**/package.xml \
-    autoware/src/universe/external/managed_transform_buffer/**/package.xml \
-    autoware/src/universe/external/morai_msgs/**/package.xml \
-    autoware/src/universe/external/muSSP/**/package.xml \
-    autoware/src/universe/external/pointcloud_to_laserscan/**/package.xml \
-    autoware/src/universe/external/rtklib_ros_bridge/**/package.xml \
-    autoware/src/universe/external/tier4_autoware_msgs/**/package.xml \
-    autoware/src/middleware/external/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \

@@ -11,15 +11,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ROS_DISTRO
 
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_perception_launch/**/package.xml \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_sensing_launch/**/package.xml \
-    autoware/src/universe/external/trt_batched_nms/**/package.xml \
-    autoware/src/universe/external/bevdet_vendor/**/package.xml \
-    autoware/src/universe/external/cuda_blackboard/**/package.xml \
-    autoware/src/universe/external/negotiated/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/**/package.xml \
-    autoware/src/sensor_component/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
@@ -73,15 +65,7 @@ COPY --from=sensing-perception-devel /opt/autoware /opt/autoware
 RUN find /opt/autoware -name '*.so' -exec strip --strip-unneeded {} +
 
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_perception_launch/**/package.xml \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_sensing_launch/**/package.xml \
-    autoware/src/universe/external/trt_batched_nms/**/package.xml \
-    autoware/src/universe/external/bevdet_vendor/**/package.xml \
-    autoware/src/universe/external/cuda_blackboard/**/package.xml \
-    autoware/src/universe/external/negotiated/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/**/package.xml \
-    autoware/src/sensor_component/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
