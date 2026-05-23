@@ -10,23 +10,8 @@ FROM ${UNIVERSE_COMMON_DEVEL_IMAGE} AS planning-control-devel
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ROS_DISTRO
 
-# autoware_pcl_extensions / autoware_pointcloud_preprocessor / autoware_cuda_utils /
-# autoware_tensorrt_common / autoware_tensorrt_plugins / autoware_external_cmd_converter /
-# autoware_raw_vehicle_cmd_converter / autoware_command_mode_types are pulled in until
-# https://github.com/autowarefoundation/autoware_universe/issues/8805 is resolved.
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_control_launch/**/package.xml \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_planning_launch/**/package.xml \
-    autoware/src/universe/autoware_universe/control/**/package.xml \
-    autoware/src/universe/autoware_universe/planning/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pcl_extensions/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pointcloud_preprocessor/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_cuda_utils/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_tensorrt_common/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_tensorrt_plugins/**/package.xml \
-    autoware/src/universe/autoware_universe/vehicle/autoware_external_cmd_converter/**/package.xml \
-    autoware/src/universe/autoware_universe/vehicle/autoware_raw_vehicle_cmd_converter/**/package.xml \
-    autoware/src/universe/autoware_universe/system/autoware_command_mode_types/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
@@ -83,18 +68,7 @@ COPY --from=planning-control-devel /opt/autoware /opt/autoware
 RUN find /opt/autoware -name '*.so' -exec strip --strip-unneeded {} +
 
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_control_launch/**/package.xml \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_planning_launch/**/package.xml \
-    autoware/src/universe/autoware_universe/control/**/package.xml \
-    autoware/src/universe/autoware_universe/planning/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pcl_extensions/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pointcloud_preprocessor/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_cuda_utils/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_tensorrt_common/**/package.xml \
-    autoware/src/universe/autoware_universe/perception/autoware_tensorrt_plugins/**/package.xml \
-    autoware/src/universe/autoware_universe/vehicle/autoware_external_cmd_converter/**/package.xml \
-    autoware/src/universe/autoware_universe/vehicle/autoware_raw_vehicle_cmd_converter/**/package.xml \
-    autoware/src/universe/autoware_universe/system/autoware_command_mode_types/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \

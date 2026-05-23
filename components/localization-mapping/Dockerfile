@@ -10,16 +10,8 @@ FROM ${UNIVERSE_COMMON_DEVEL_IMAGE} AS localization-mapping-devel
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ROS_DISTRO
 
-# autoware_pcl_extensions / autoware_pointcloud_preprocessor / autoware_automatic_pose_initializer
-# are pulled in until https://github.com/autowarefoundation/autoware_universe/issues/10282 is resolved.
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_localization_launch/**/package.xml \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_map_launch/**/package.xml \
-    autoware/src/universe/autoware_universe/localization/**/package.xml \
-    autoware/src/universe/autoware_universe/map/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pcl_extensions/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pointcloud_preprocessor/**/package.xml \
-    autoware/src/universe/autoware_universe/system/autoware_default_adapi_helpers/autoware_automatic_pose_initializer/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
@@ -71,13 +63,7 @@ COPY --from=localization-mapping-devel /opt/autoware /opt/autoware
 RUN find /opt/autoware -name '*.so' -exec strip --strip-unneeded {} +
 
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_localization_launch/**/package.xml \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_map_launch/**/package.xml \
-    autoware/src/universe/autoware_universe/localization/**/package.xml \
-    autoware/src/universe/autoware_universe/map/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pcl_extensions/**/package.xml \
-    autoware/src/universe/autoware_universe/sensing/autoware_pointcloud_preprocessor/**/package.xml \
-    autoware/src/universe/autoware_universe/system/autoware_default_adapi_helpers/autoware_automatic_pose_initializer/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \

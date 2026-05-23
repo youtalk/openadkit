@@ -11,13 +11,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ROS_DISTRO
 
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_vehicle_launch/**/package.xml \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_system_launch/**/package.xml \
-    autoware/src/universe/autoware_universe/vehicle/**/package.xml \
-    autoware/src/universe/autoware_universe/system/**/package.xml \
-    autoware/src/universe/autoware_universe/localization/autoware_pose2twist/**/package.xml \
-    autoware/src/universe/autoware_universe/planning/planning_validator/**/package.xml \
-    autoware/src/sensor_component/external/sensor_component_description/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
@@ -69,13 +63,7 @@ COPY --from=vehicle-system-devel /opt/autoware /opt/autoware
 RUN find /opt/autoware -name '*.so' -exec strip --strip-unneeded {} +
 
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_vehicle_launch/**/package.xml \
-    autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_system_launch/**/package.xml \
-    autoware/src/universe/autoware_universe/vehicle/**/package.xml \
-    autoware/src/universe/autoware_universe/system/**/package.xml \
-    autoware/src/universe/autoware_universe/localization/autoware_pose2twist/**/package.xml \
-    autoware/src/universe/autoware_universe/planning/planning_validator/**/package.xml \
-    autoware/src/sensor_component/external/sensor_component_description/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \

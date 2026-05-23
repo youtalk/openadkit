@@ -11,7 +11,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ROS_DISTRO
 
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/universe/autoware_universe/visualization/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
@@ -57,7 +57,7 @@ COPY --from=visualizer-devel /opt/autoware /opt/autoware
 RUN find /opt/autoware -name '*.so' -exec strip --strip-unneeded {} +
 
 COPY --parents --chown=${USERNAME}:${USERNAME} \
-    autoware/src/universe/autoware_universe/visualization/**/package.xml \
+    autoware/src/**/package.xml \
     /tmp/
 
 RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
