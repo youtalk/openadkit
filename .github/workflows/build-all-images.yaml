@@ -51,7 +51,7 @@ jobs:
   # =============================================================================
   build-common:
     needs: prepare
-    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
+    runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && (matrix.platform == 'linux/amd64' && 'ubicloud-standard-16' || 'ubicloud-standard-16-arm') || (matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm') }}
     permissions:
       contents: read
       packages: write
@@ -185,7 +185,7 @@ jobs:
   # Stage 2: Build component images (parallel)
   # =============================================================================
   build-components:
-    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
+    runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && (matrix.platform == 'linux/amd64' && 'ubicloud-standard-16' || 'ubicloud-standard-16-arm') || (matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm') }}
     needs: [prepare, build-common]
     permissions:
       contents: read
@@ -281,7 +281,7 @@ jobs:
   # Stage 3: Build universe and universe-cuda images (parallel)
   # =============================================================================
   build-universe:
-    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
+    runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && (matrix.platform == 'linux/amd64' && 'ubicloud-standard-16' || 'ubicloud-standard-16-arm') || (matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm') }}
     needs: [prepare, build-common, build-components]
     permissions:
       contents: read

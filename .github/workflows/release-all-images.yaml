@@ -91,7 +91,7 @@ jobs:
   # Stage 1: Build common images
   # =============================================================================
   build-common:
-    runs-on: ubuntu-22.04
+    runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && 'ubicloud-standard-16' || 'ubuntu-22.04' }}
     needs: detect-autoware-tag
     if: needs.detect-autoware-tag.outputs.should_run == 'true'
     permissions:
@@ -199,7 +199,7 @@ jobs:
   # Stage 2: Build component images (parallel)
   # =============================================================================
   build-components:
-    runs-on: ubuntu-22.04
+    runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && 'ubicloud-standard-16' || 'ubuntu-22.04' }}
     needs: [build-common, detect-autoware-tag]
     if: needs.detect-autoware-tag.outputs.should_run == 'true'
     permissions:
@@ -283,7 +283,7 @@ jobs:
   # Stage 3: Build universe and universe-cuda images (parallel)
   # =============================================================================
   build-universe:
-    runs-on: ubuntu-22.04
+    runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && 'ubicloud-standard-16' || 'ubuntu-22.04' }}
     needs: [detect-autoware-tag, build-common, build-components]
     if: needs.detect-autoware-tag.outputs.should_run == 'true'
     permissions:
