@@ -194,7 +194,7 @@ jobs:
   # Stage 2: Build component images (parallel)
   # =============================================================================
   build-components:
-    runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && format('ubicloud-standard-{0}', startsWith(matrix.target, 'sensing-perception') && '30' || '16') || 'ubuntu-22.04' }}
+    runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && 'ubicloud-standard-16' || 'ubuntu-22.04' }}
     needs: [build-universe-common, detect-autoware-tag]
     if: needs.detect-autoware-tag.outputs.should_run == 'true'
     permissions:
