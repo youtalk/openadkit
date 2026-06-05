@@ -60,7 +60,7 @@ block-beta
 ```
 
 Images are built with `docker buildx bake` from
-[`components/docker-bake.hcl`](docker-bake.hcl). The `universe-common`
+[`docker/docker-bake.hcl`](../docker/docker-bake.hcl). The `universe-common`
 layer is an openadkit-owned thin intermediate that compiles the
 universe-common slice of Autoware on top of upstream `core-devel`/`core`.
 
@@ -69,8 +69,9 @@ universe-common slice of Autoware on top of upstream `core-devel`/`core`.
 | Group | Description | Targets |
 |-------|-------------|---------|
 | `universe-common` | Thin intermediate layer | `universe-common-devel`, `universe-common` |
-| `component` | Component images (incl. CUDA) | `sensing-perception`, `sensing-perception-cuda`, `localization-mapping`, `planning-control`, `vehicle-system`, `api`, `visualizer`, `simulator` |
-| `universe-all` | Aggregated images | `universe`, `universe-cuda` |
+| `components` | Non-CUDA component images | `sensing-perception`, `localization-mapping`, `planning-control`, `vehicle-system`, `api`, `visualizer`, `simulator` |
+| `components-cuda` | CUDA component images | `sensing-perception-cuda` |
+| `universe` / `universe-cuda` | Aggregated images | `universe`, `universe-cuda` |
 
 See the [components documentation](https://autowarefoundation.github.io/openadkit/components/)
 for build commands and the CI pipeline.
