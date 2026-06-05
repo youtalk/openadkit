@@ -11,9 +11,6 @@ inputs:
   registry:
     description: Container registry
     required: true
-  image-prefix-common:
-    description: Image prefix for common images
-    required: true
   image-prefix-component:
     description: Image prefix for component images
     required: true
@@ -33,38 +30,6 @@ runs:
         registry: ${{ inputs.registry }}
         username: ${{ github.actor }}
         password: ${{ inputs.token }}
-
-    - name: Combine multi-arch images for common packages
-      run: |
-        set -e
-
-        IMAGE="${{ inputs.image-prefix-common }}"
-        DISTRO="${{ inputs.ros-distro }}"
-        BUILD_TAG="${{ inputs.build-tag }}"
-
-        # Known common image variants
-        MULTI_ARCH_VARIANTS="base devel"
-        CUDA_VARIANTS="base-cuda devel-cuda"
-
-        # Create multi-arch manifests (amd64 + arm64)
-        for variant in ${MULTI_ARCH_VARIANTS}; do
-          base_tag="${variant}-${DISTRO}-${BUILD_TAG}"
-          echo "Creating multi-arch manifest for ${IMAGE}:${base_tag}"
-          docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
-            "${IMAGE}:${variant}-amd64-${DISTRO}-${BUILD_TAG}" \
-            "${IMAGE}:${variant}-arm64-${DISTRO}-${BUILD_TAG}"
-          echo "Created ${IMAGE}:${base_tag}"
-        done
-
-        # Create single-arch aliases for CUDA (amd64-only)
-        for variant in ${CUDA_VARIANTS}; do
-          base_tag="${variant}-${DISTRO}-${BUILD_TAG}"
-          echo "Creating single-arch manifest for ${IMAGE}:${base_tag}"
-          docker buildx imagetools create -t "${IMAGE}:${base_tag}" \
-            "${IMAGE}:${variant}-amd64-${DISTRO}-${BUILD_TAG}"
-          echo "Created ${IMAGE}:${base_tag}"
-        done
-      shell: bash
 
     - name: Combine multi-arch images for component packages
       run: |
