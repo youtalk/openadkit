@@ -186,6 +186,9 @@ jobs:
             universe-common-devel
             universe-common
           push: true
+          set: |
+            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:universe-common-main
+            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:universe-common-main,mode=max
 
   # =============================================================================
   # Stage 2: Build component images (parallel)
@@ -288,6 +291,8 @@ jobs:
           set: |
             *.contexts.universe-common-devel=docker-image://${{ env.IMAGE_PREFIX_COMPONENT }}:universe-common-devel-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
             *.contexts.universe-common=docker-image://${{ env.IMAGE_PREFIX_COMPONENT }}:universe-common-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-main
+            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-main,mode=max
 
   # =============================================================================
   # Stage 3: Build universe and universe-cuda images (parallel)
@@ -390,3 +395,5 @@ jobs:
             *.contexts.api=docker-image://${{ env.IMAGE_PREFIX_COMPONENT }}:api-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
             *.contexts.visualizer=docker-image://${{ env.IMAGE_PREFIX_COMPONENT }}:visualizer-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
             *.contexts.simulator=docker-image://${{ env.IMAGE_PREFIX_COMPONENT }}:simulator-${{ needs.detect-autoware-tag.outputs.autoware_tag }}
+            *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-main
+            *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-main,mode=max
