@@ -140,6 +140,9 @@ jobs:
 
       - name: Build and push universe-common
         uses: docker/bake-action@v5
+        env:
+          ROS_DISTRO: ${{ matrix.ros-distro }}
+          UPSTREAM_TAG: ${{ vars.UPSTREAM_TAG }}
         with:
           files: |
             ${{ env.BAKE_FILE }}
@@ -151,8 +154,6 @@ jobs:
           push: true
           set: |
             *.platform=${{ matrix.platform }}
-            *.args.ROS_DISTRO=${{ matrix.ros-distro }}
-            *.args.UPSTREAM_TAG=${{ vars.UPSTREAM_TAG }}
             *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:universe-common-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main
             *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:universe-common-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main,mode=max
 
@@ -255,6 +256,9 @@ jobs:
 
       - name: Build and push ${{ matrix.target }}
         uses: docker/bake-action@v5
+        env:
+          ROS_DISTRO: ${{ matrix.ros-distro }}
+          UPSTREAM_TAG: ${{ vars.UPSTREAM_TAG }}
         with:
           files: |
             ${{ env.BAKE_FILE }}
@@ -263,8 +267,6 @@ jobs:
           push: true
           set: |
             *.platform=${{ matrix.platform }}
-            *.args.ROS_DISTRO=${{ matrix.ros-distro }}
-            *.args.UPSTREAM_TAG=${{ vars.UPSTREAM_TAG }}
             *.contexts.universe-common-devel=docker-image://${{ env.IMAGE_PREFIX_COMPONENT }}:universe-common-devel-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
             *.contexts.universe-common=docker-image://${{ env.IMAGE_PREFIX_COMPONENT }}:universe-common-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
             *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main
@@ -365,6 +367,9 @@ jobs:
 
       - name: Build and push ${{ matrix.target }}
         uses: docker/bake-action@v5
+        env:
+          ROS_DISTRO: ${{ matrix.ros-distro }}
+          UPSTREAM_TAG: ${{ vars.UPSTREAM_TAG }}
         with:
           files: |
             ${{ env.BAKE_FILE }}
@@ -373,8 +378,6 @@ jobs:
           push: true
           set: |
             *.platform=${{ matrix.platform }}
-            *.args.ROS_DISTRO=${{ matrix.ros-distro }}
-            *.args.UPSTREAM_TAG=${{ vars.UPSTREAM_TAG }}
             *.contexts.sensing-perception=docker-image://${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
             *.contexts.sensing-perception-cuda=docker-image://${{ env.IMAGE_PREFIX_COMPONENT }}:sensing-perception-cuda-amd64-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
             *.contexts.localization-mapping=docker-image://${{ env.IMAGE_PREFIX_COMPONENT }}:localization-mapping-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-${{ needs.prepare.outputs.build_tag }}
