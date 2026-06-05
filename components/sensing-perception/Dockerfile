@@ -14,8 +14,7 @@ COPY --parents --chown=${USERNAME}:${USERNAME} \
     autoware/src/**/package.xml \
     /tmp/
 
-RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
+RUN \
     apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     . /opt/autoware/setup.sh && \
@@ -26,7 +25,6 @@ RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=
       --dependency-types=test
 
 RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
-    --mount=type=cache,id=ccache-${ROS_DISTRO},target=/home/aw/.ccache,uid=1000,gid=1000 \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     . /opt/autoware/setup.sh && \
     colcon build \
@@ -44,8 +42,7 @@ RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
       --cmake-args -DCMAKE_BUILD_TYPE=Release && \
     rm -rf build log
 
-RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
+RUN \
     apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     rosdep install -y --from-paths /tmp/autoware/src /opt/autoware/*/share \
@@ -68,8 +65,7 @@ COPY --parents --chown=${USERNAME}:${USERNAME} \
     autoware/src/**/package.xml \
     /tmp/
 
-RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
+RUN \
     apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     rosdep install -y --from-paths /tmp /opt/autoware/*/share \

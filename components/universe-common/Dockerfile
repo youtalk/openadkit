@@ -18,8 +18,7 @@ ARG ROS_DISTRO
 COPY --parents --chown=${USERNAME}:${USERNAME} \
     autoware/src/**/package.xml \
     /tmp/
-RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
+RUN \
     apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     . /opt/autoware/setup.sh && \
@@ -34,8 +33,6 @@ RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=
 USER ${USERNAME}
 RUN --mount=type=bind,source=autoware/ansible-galaxy-requirements.yaml,target=/tmp/ansible/ansible-galaxy-requirements.yaml \
     --mount=type=bind,source=autoware/ansible,target=/tmp/ansible/ansible \
-    --mount=type=cache,id=pip-cache,target=/home/aw/.cache/pip,uid=1000,gid=1000 \
-    --mount=type=cache,id=pipx-cache,target=/home/aw/.cache/pipx,uid=1000,gid=1000 \
     pipx install --include-deps "ansible==10.*" && \
     cd /tmp/ansible && \
     ansible-galaxy collection install -f -r ansible-galaxy-requirements.yaml && \
@@ -52,7 +49,6 @@ ENV LD_LIBRARY_PATH="/opt/acados/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # colcon build the universe-common slice into /opt/autoware (next to core).
 RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
-    --mount=type=cache,id=ccache-${ROS_DISTRO},target=/home/aw/.ccache,uid=1000,gid=1000 \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     . /opt/autoware/setup.sh && \
     colcon build \
@@ -74,8 +70,7 @@ RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
     rm -rf build log
 
 # Exec-only rosdep for the universe-common slice.
-RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
+RUN \
     apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     rosdep install -y --from-paths /tmp/autoware/src /opt/autoware/*/share \
@@ -104,8 +99,7 @@ COPY --parents --chown=${USERNAME}:${USERNAME} \
     autoware/src/**/package.xml \
     /tmp/
 
-RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
+RUN \
     apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     rosdep install -y --from-paths /tmp /opt/autoware/*/share \
