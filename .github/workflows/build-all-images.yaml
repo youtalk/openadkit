@@ -134,7 +134,7 @@ jobs:
   # =============================================================================
   build-common:
     needs: prepare
-    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
+    runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && (matrix.platform == 'linux/amd64' && 'ubicloud-standard-16' || 'ubicloud-standard-16-arm') || (matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm') }}
     timeout-minutes: 120
     permissions:
       actions: write
@@ -254,7 +254,7 @@ jobs:
   # Stage 2: Build component images (parallel)
   # =============================================================================
   build-components:
-    runs-on: ${{ matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm' }}
+    runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && (matrix.platform == 'linux/amd64' && 'ubicloud-standard-16' || 'ubicloud-standard-16-arm') || (matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm') }}
     timeout-minutes: 120
     needs: [prepare, build-common]
     # A single common matrix failure must not skip cells whose common image
