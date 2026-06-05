@@ -38,10 +38,14 @@ The `vehicle-system` image packages both the vehicle interface and system-level 
 
 The API component is responsible for providing [AD API](https://autowarefoundation.github.io/autoware-documentation/main/design/autoware-interfaces/ad-api/) interface for the vehicle's state. API component can be configured to enable or disable various interfaces. For more details, see the [Autoware Interface design document](https://autowarefoundation.github.io/autoware-documentation/main/design/autoware-architecture-v1/interfaces/).
 
+### System
+
+The system component is responsible for managing the vehicle's system. System component can be configured to use a variety of system algorithms, including **system health monitoring and system error handling**.
+
 ## Building from source
 
 Open AD Kit images are built with `docker buildx bake` using
-[`components/docker-bake.hcl`](https://github.com/autowarefoundation/openadkit/blob/main/components/docker-bake.hcl).
+[`docker/docker-bake.hcl`](https://github.com/autowarefoundation/openadkit/blob/main/docker/docker-bake.hcl).
 The build graph is:
 
 ```
@@ -72,10 +76,10 @@ Autoware on top of upstream `core-devel`/`core`; everything below
 
 | Group | Targets |
 |-------|---------|
-| `default` | everything: `universe-common` + `component` + `universe-all` |
 | `universe-common` | `universe-common-devel`, `universe-common` |
-| `component` | the seven non-CUDA component images plus `sensing-perception-cuda` |
-| `universe-all` | the aggregated `universe` and `universe-cuda` images |
+| `components` | the seven non-CUDA component images |
+| `components-cuda` | `sensing-perception-cuda` |
+| `universe` / `universe-cuda` | the aggregated images |
 
 ### Upstream pin
 
@@ -85,11 +89,14 @@ empty uses upstream's plain `<name>-<distro>` multi-arch tag.
 
 ## CI pipeline
 
-`build-all-images.yaml` builds the universe-common graph on pushes,
-schedules, and manual dispatch. It walks the `{humble, jazzy} × {amd64,
-arm64}` matrix through staged jobs — `prepare`, then `build-universe-common`,
-`build-components`, and `build-universe` — so each layer is pushed before the
-layer that depends on it. A final `create-manifests` job stitches the
-per-arch tags into multi-arch manifests via the `combine-multi-arch-images`
-composite action. `release-all-images.yaml` runs on a schedule to track
-Autoware release tags and build the matching single-arch release images.
+`docker-build-and-push.yaml` is the entrypoint. On pushes to `main` (and on
+release tags) it runs a changed-files gate, then fans out into a
+per-`(distro, arch)` five-stage pipeline (`docker-build-pipeline.yaml`),
+where each stage builds one bake-group via `docker-build.yaml`. After both
+architectures finish, `docker-manifest.yaml` stitches the per-arch tags into
+multi-arch manifests.
+
+The Jazzy manifest job additionally publishes no-distro-suffix alias tags
+(`openadkit:<name>`), so existing `ghcr.io/autowarefoundation/openadkit:<name>`
+references resolve to the Jazzy multi-arch image. Humble consumers must use
+the explicit `-humble` suffix.
