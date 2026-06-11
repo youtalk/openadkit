@@ -483,9 +483,12 @@ jobs:
     runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && (matrix.platform == 'linux/amd64' && 'ubicloud-standard-16' || 'ubicloud-standard-16-arm') || (matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm') }}
     needs: [prepare, build-common]
     permissions:
-      actions: read
+      actions: write
       contents: read
       packages: write
+    env:
+      CACHE_KEY_PREFIX: buildkit-mounts-${{ matrix.target }}-${{ matrix.ros-distro }}-${{ matrix.platform-label }}-
+      IS_MAIN_PUSH: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' }}
     strategy:
       fail-fast: false
       max-parallel: 8
@@ -546,6 +549,54 @@ jobs:
           flavor: |
             latest=false
 
+      - name: Restore BuildKit cache mounts
+        id: cache-restore
+        uses: actions/cache/restore@v5
+        with:
+          path: cache-mounts
+          key: ${{ env.CACHE_KEY_PREFIX }}${{ github.sha }}
+          restore-keys: |
+            ${{ env.CACHE_KEY_PREFIX }}
+
+      - name: Arm post-step save of BuildKit cache mounts (main only)
+        if: env.IS_MAIN_PUSH == 'true'
+        uses: actions/cache@v5
+        with:
+          path: cache-mounts
+          key: ${{ env.CACHE_KEY_PREFIX }}${{ github.sha }}
+          lookup-only: true
+
+      - name: Inject BuildKit cache mounts
+        uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          cache-map: |
+            {
+              ${{ matrix.target != 'sensing-perception-cuda' && format('"cache-mounts/apt-cache": {{ "id": "apt-cache-{0}", "target": "/var/cache/apt" }},', matrix.ros-distro) || '' }}
+              "cache-mounts/apt-lists": {
+                "id": "apt-lists-${{ matrix.ros-distro }}",
+                "target": "/var/lib/apt/lists"
+              },
+              "cache-mounts/ccache": {
+                "id": "ccache-${{ matrix.ros-distro }}",
+                "target": "/home/aw/.ccache",
+                "uid": "1000",
+                "gid": "1000"
+              },
+              "cache-mounts/pip": {
+                "id": "pip-cache",
+                "target": "/home/aw/.cache/pip",
+                "uid": "1000",
+                "gid": "1000"
+              },
+              "cache-mounts/pipx": {
+                "id": "pipx-cache",
+                "target": "/home/aw/.cache/pipx",
+                "uid": "1000",
+                "gid": "1000"
+              }
+            }
+          skip-extraction: ${{ steps.cache-restore.outputs.cache-hit }}
+
       - name: Build and push ${{ matrix.target }}
         uses: docker/bake-action@v5
         env:
@@ -571,6 +622,24 @@ jobs:
             *.labels."org.opencontainers.image.autoware-base-version"=${{ needs.prepare.outputs.autoware_base_version }}
             *.cache-from=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main
             *.cache-to=type=registry,ref=ghcr.io/${{ github.repository_owner }}/openadkit-buildcache:${{ matrix.target }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}-${{ matrix.ros-distro }}-main,mode=max
+
+      - name: Prune BuildKit cache mount lineage (main only)
+        if: env.IS_MAIN_PUSH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP_KEY: ${{ env.CACHE_KEY_PREFIX }}${{ github.sha }}
+          MAX_GB: 6
+        run: |
+          set -euo pipefail
+          max_bytes=$((MAX_GB * 1000 * 1000 * 1000))
+          gh cache list --repo "$GITHUB_REPOSITORY" --key "$CACHE_KEY_PREFIX" --limit 100 --json key,sizeInBytes \
+            | jq -r --arg keep "$KEEP_KEY" --argjson max "$max_bytes" \
+                '.[] | select(.key != $keep or .sizeInBytes > $max) | .key' \
+            | while read -r key; do
+                echo "delete: $key"
+                gh cache delete "$key" --repo "$GITHUB_REPOSITORY" || true
+              done
+        shell: bash
 
   # =============================================================================
   # Stage 3: Create multi-arch manifests
