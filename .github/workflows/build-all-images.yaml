@@ -466,6 +466,11 @@ jobs:
           MAX_GB: 6
         run: |
           set -euo pipefail
+          # KEEP_KEY is written by the actions/cache POST step, which runs after
+          # this step, so it is never present here: this prune only removes
+          # prior-lineage caches. The size check refreshes an oversized cache on
+          # a same-SHA rerun (when KEEP_KEY already exists). --limit caps recovery
+          # if a lineage ever exceeds it; steady state keeps a single entry.
           max_bytes=$((MAX_GB * 1000 * 1000 * 1000))
           gh cache list --repo "$GITHUB_REPOSITORY" --key "$CACHE_KEY_PREFIX" --limit 100 --json key,sizeInBytes \
             | jq -r --arg keep "$KEEP_KEY" --argjson max "$max_bytes" \
@@ -631,6 +636,11 @@ jobs:
           MAX_GB: 6
         run: |
           set -euo pipefail
+          # KEEP_KEY is written by the actions/cache POST step, which runs after
+          # this step, so it is never present here: this prune only removes
+          # prior-lineage caches. The size check refreshes an oversized cache on
+          # a same-SHA rerun (when KEEP_KEY already exists). --limit caps recovery
+          # if a lineage ever exceeds it; steady state keeps a single entry.
           max_bytes=$((MAX_GB * 1000 * 1000 * 1000))
           gh cache list --repo "$GITHUB_REPOSITORY" --key "$CACHE_KEY_PREFIX" --limit 100 --json key,sizeInBytes \
             | jq -r --arg keep "$KEEP_KEY" --argjson max "$max_bytes" \
