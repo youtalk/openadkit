@@ -408,7 +408,11 @@ jobs:
   # Stage 2: Build component images (parallel)
   # =============================================================================
   build-components:
-    runs-on: ${{ (github.repository_owner == 'youtalk' && github.actor == 'youtalk') && (matrix.platform == 'linux/amd64' && 'ubicloud-standard-16' || 'ubicloud-standard-16-arm') || (matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm') }}
+    # TEMP(validation, DO NOT MERGE): force the sensing-perception-cuda amd64
+    # leg onto a standard ubuntu-22.04 runner so the fork CI reproduces the
+    # small-/ disk exhaustion and proves the /mnt data-root fix. Revert this
+    # one line before cherry-picking the fix to upstream/main.
+    runs-on: ${{ (matrix.target == 'sensing-perception-cuda' && matrix.platform == 'linux/amd64') && 'ubuntu-22.04' || ((github.repository_owner == 'youtalk' && github.actor == 'youtalk') && (matrix.platform == 'linux/amd64' && 'ubicloud-standard-16' || 'ubicloud-standard-16-arm') || (matrix.platform == 'linux/amd64' && 'ubuntu-22.04' || 'ubuntu-22.04-arm')) }}
     needs: [prepare, build-common]
     permissions:
       actions: read
