@@ -1,5 +1,5 @@
 name: free-disk-space
-description: Free disk space on GitHub-hosted Ubuntu runners
+description: Reclaim root-partition space and relocate Docker to the large partition on Ubuntu runners
 
 runs:
   using: composite
@@ -27,3 +27,67 @@ runs:
         large-packages: true
         docker-images: true
         swap-storage: false
+
+    - name: Relocate Docker data-root to the large partition
+      shell: bash
+      env:
+        # /mnt is the large ephemeral disk on standard GitHub-hosted runners,
+        # while Docker defaults to /var/lib/docker on the small / partition. The
+        # heaviest build leg (sensing-perception-cuda, amd64) exhausts / there;
+        # moving the data-root onto /mnt gives BuildKit tens of GB of headroom
+        # without touching any cache setting.
+        TARGET_ROOT: /mnt/docker
+        MIN_AVAIL_GB: "40"
+      run: |
+        set -euo pipefail
+
+        target_parent="$(dirname "${TARGET_ROOT}")"
+
+        avail_kb() { df -P "$1" | awk 'NR==2 {print $4}'; }
+
+        # Guard: only relocate when the target partition exists, is writable,
+        # and is meaningfully larger than the current root. This no-ops on
+        # Ubicloud / self-hosted runners where /mnt is absent or not larger,
+        # leaving their behaviour unchanged.
+        if [ ! -d "${target_parent}" ] || [ ! -w "${target_parent}" ]; then
+          echo "Skip relocation: ${target_parent} is missing or not writable."
+          exit 0
+        fi
+
+        current_root="$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)"
+        target_avail_kb="$(avail_kb "${target_parent}")"
+        current_avail_kb="$(avail_kb "$(dirname "${current_root}")")"
+        min_kb=$(( MIN_AVAIL_GB * 1024 * 1024 ))
+
+        if [ "${target_avail_kb}" -lt "${min_kb}" ] || [ "${target_avail_kb}" -le "${current_avail_kb}" ]; then
+          echo "Skip relocation: ${target_parent} has $((target_avail_kb / 1024 / 1024)) GB free," \
+               "not larger than current root's $((current_avail_kb / 1024 / 1024)) GB (min ${MIN_AVAIL_GB} GB)."
+          exit 0
+        fi
+
+        echo "Relocating Docker data-root: ${current_root} -> ${TARGET_ROOT}"
+        # A fresh data-root is enough: free-disk-space has already pruned the
+        # preinstalled images and the build pulls its bases fresh from GHCR, so
+        # nothing is migrated.
+        sudo systemctl stop docker.socket 2>/dev/null || true
+        sudo systemctl stop docker
+        sudo mkdir -p "${TARGET_ROOT}"
+
+        daemon_json=/etc/docker/daemon.json
+        sudo mkdir -p /etc/docker
+        if [ -s "${daemon_json}" ]; then
+          tmp="$(mktemp)"
+          sudo jq --arg root "${TARGET_ROOT}" '. + {"data-root": $root}' "${daemon_json}" > "${tmp}"
+          sudo mv "${tmp}" "${daemon_json}"
+        else
+          printf '{\n  "data-root": "%s"\n}\n' "${TARGET_ROOT}" | sudo tee "${daemon_json}" >/dev/null
+        fi
+
+        sudo systemctl start docker
+        for _ in $(seq 1 30); do
+          if docker info >/dev/null 2>&1; then break; fi
+          sleep 1
+        done
+
+        echo "Docker Root Dir: $(docker info -f '{{.DockerRootDir}}')"
+        df -h / "${target_parent}"
