@@ -1,0 +1,13 @@
+name: spike-arm64-kvm
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubicloud-standard-16-arm
+    steps:
+      - name: Probe virtualization support
+        run: |
+          uname -m
+          nproc
+          free -h | head -2
+          ls -l /dev/kvm 2>&1 || true
+          if [ -w /dev/kvm ]; then echo "VERDICT: KVM_AVAILABLE"; else echo "VERDICT: KVM_ABSENT"; fi
