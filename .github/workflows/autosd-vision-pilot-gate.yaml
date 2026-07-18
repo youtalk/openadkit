@@ -1,0 +1,80 @@
+name: autosd-vision-pilot-gate
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - platforms/autosd/vision-pilot/**
+      - .github/workflows/autosd-vision-pilot-gate.yaml
+permissions:
+  contents: read
+  packages: read
+jobs:
+  build-and-boot:
+    runs-on: ubicloud-standard-16-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch 10-frame test data into aib/files
+        run: |
+          cd platforms/autosd/vision-pilot
+          ./smoke/fetch-testdata.sh aib/files 10
+          . ./smoke/testdata.env
+          mv aib/files/clip10.mp4 aib/files/clip.mp4
+          mv "aib/files/speed10.$SPEED_EXT" aib/files/speed.txt
+
+      - name: Prepare ghcr auth for the aib container-image embed
+        run: |
+          cd platforms/autosd/vision-pilot/aib
+          token_b64=$(printf '%s:%s' "${{ github.actor }}" "${{ secrets.GITHUB_TOKEN }}" | base64 -w0)
+          printf '{"auths":{"ghcr.io":{"auth":"%s"}}}' "$token_b64" > auth.json
+
+      - name: Install podman, QEMU, expect
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman qemu-system-arm qemu-efi-aarch64 qemu-utils expect
+
+      - name: Install automotive-image-builder runner
+        run: |
+          curl -L -o auto-image-builder.sh \
+            "https://gitlab.com/CentOS/automotive/src/automotive-image-builder/-/raw/main/auto-image-builder.sh?ref_type=heads"
+          chmod +x auto-image-builder.sh
+          sudo bash ./auto-image-builder.sh --help | head -30
+
+      - name: Build AutoSD image (native aarch64)
+        run: |
+          cd platforms/autosd/vision-pilot/aib
+          # aib runs osbuild inside a container; $PWD is mounted at /host, so the
+          # auth.json here is /host/auth.json inside — point skopeo at it to pull
+          # the private ghcr image the manifest embeds.
+          sudo AIB_PODMAN_OPTIONS="-e REGISTRY_AUTH_FILE=/host/auth.json" \
+            bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build \
+            --distro autosd10-sig --target qemu \
+            --define-file vars.yml \
+            image.aib.yml localhost/autosd-visionpilot:latest visionpilot.qcow2
+          rm -f auth.json
+          ls -lh visionpilot.qcow2
+
+      - name: Boot and run the Quadlet smoke over serial
+        run: |
+          cd platforms/autosd/vision-pilot
+          [ -w /dev/kvm ] && echo "accel: KVM" || echo "accel: TCG (no /dev/kvm)"
+          sudo ./scripts/ci-serial-smoke.exp ./scripts/run-qemu.sh aib/visionpilot.qcow2 /tmp/vp-session.log
+          echo "--- session tail ---"; tail -40 /tmp/vp-session.log || true
+
+      - name: Assert smoke output (M=10 -> 9 planned frames)
+        run: |
+          cd platforms/autosd/vision-pilot
+          # clip10 is the first 10 frames of clip100, so its 9 planned frames
+          # compare against the first 9 reference entries (assert zips to shorter).
+          python3 smoke/assert-smoke.py --log /tmp/vp-session.log --expect-frames 9 \
+            --reference smoke/reference/reference-amd64.json \
+            --tolerance smoke/reference/tolerance.json
+
+      - name: Upload image artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visionpilot-qcow2
+          path: platforms/autosd/vision-pilot/aib/visionpilot.qcow2
+          retention-days: 7
+          if-no-files-found: ignore
