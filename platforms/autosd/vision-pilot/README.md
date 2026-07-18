@@ -46,6 +46,54 @@ docker buildx 0.31.2. `qemu-efi-aarch64` provides `/usr/share/AAVMF/`; the apt
 `qemu-user-static` package and the `tonistiigi/binfmt` step both register the
 aarch64 binfmt interpreter (`/usr/libexec/qemu-binfmt/aarch64-binfmt-P`).
 
+## VisionPilot container image
+
+The image is built from [autoware_vision_pilot](https://github.com/autowarefoundation/autoware_vision_pilot)
+at the commit pinned in `smoke/visionpilot.env` (`VP_COMMIT`). VisionPilot is
+**not vendored**; it is cloned at build time. Two small source fixes in
+`patches/` **must be applied before `docker build`**, or the image is
+headless-broken (aborts opening an X window) and exits non-zero on success:
+
+```bash
+. smoke/visionpilot.env
+git clone "$VP_REPO" vp && (cd vp && git checkout "$VP_COMMIT" && git lfs pull)
+for p in patches/*.patch; do (cd vp && git apply "$OLDPWD/$p"); done
+docker build -f vp/VisionPilot/docker/Dockerfile.cpu -t visionpilot:cpu-amd64 vp/VisionPilot
+```
+
+Both patches are carried only until merged upstream (PRs to autoware_vision_pilot):
+
+- `0001-visualization-open-local-window-lazily.patch` — `LocalDisplay` opens its
+  OpenCV window lazily on first render, so a headless run (`visualization_on=false`,
+  no `$DISPLAY`) does not abort in the constructor.
+- `0002-return-zero-exit-on-clean-shutdown.patch` — `main` returns `0` on a clean
+  shutdown (upstream returns the `bool` from `stop()`, i.e. exit 1 on success),
+  so VisionPilot works as a Podman Quadlet `oneshot` service.
+
+### Smoke test
+
+`smoke/` runs a deterministic CPU inference over a pinned OpenLane clip and
+checks the per-frame `plan:` log against `smoke/reference/`. Run locally:
+
+```bash
+./smoke/fetch-testdata.sh /tmp/vp-data 100
+cp /tmp/vp-data/clip100.mp4 /tmp/vp-data/clip.mp4
+cp /tmp/vp-data/speed100.txt /tmp/vp-data/speed.txt
+docker run --rm -v /tmp/vp-data:/data:ro \
+  -v "$PWD/smoke/config/vision_pilot.conf:/usr/share/visionpilot/config/vision_pilot.conf:ro" \
+  -v "$PWD/smoke/config/vision_pilot_test.conf:/usr/share/visionpilot/config/vision_pilot_test.conf:ro" \
+  visionpilot:cpu-amd64 2>&1 | tee /tmp/run.log
+python3 smoke/assert-smoke.py --log /tmp/run.log --expect-frames 99 \
+  --reference smoke/reference/reference-amd64.json --tolerance smoke/reference/tolerance.json
+```
+
+**Mount the two `.conf` files individually, not the whole `config/` directory** —
+a directory mount would hide the image's build-generated `H.yaml` and
+`homography_C_matrix.yaml` and crash at startup. An N-frame clip yields **N-1**
+`plan:` frames (the AutoDrive model consumes the first frame as temporal
+history), so `--expect-frames` is 99 for the 100-frame clip and 9 for the
+10-frame clip.
+
 ## Running
 
 (filled in by the QEMU tasks)

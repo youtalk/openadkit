@@ -46,6 +46,17 @@ def main():
     p.add_argument("--out")
     a = p.parse_args()
 
+    # Usage validation (fail with a clear message, not a stack trace).
+    if not a.calibrate and not a.log:
+        sys.exit("usage: give --log (extract/compare) or --calibrate a.json b.json")
+    if a.reference and not a.tolerance:
+        sys.exit("--reference requires --tolerance")
+    # Compare mode without a frame-count floor would silently PASS a run that
+    # crashed before emitting any 'plan:' line (zip truncates to the shorter
+    # list), so require the count guard whenever comparing to a reference.
+    if a.reference and a.expect_frames is None:
+        sys.exit("--reference requires --expect-frames (guards against a short/empty run)")
+
     if a.calibrate:
         runs = [json.load(open(f)) for f in a.calibrate]
         # Per-field tolerance: fields span very different scales (tyre ~0.2 rad
@@ -56,7 +67,11 @@ def main():
         for fa, fb in zip(runs[0], runs[1]):
             for i, (x, y) in enumerate(zip(fa["values"], fb["values"])):
                 maxd[i] = max(maxd[i], abs(x - y))
-        tol = {"abs_tol_per_field": [max(4 * d, 1e-4) for d in maxd]}
+        # Floor at 0.05: the plan log prints these fields with 1-4 decimals
+        # (dist to 0.1, cte/vel to 0.01), so a tolerance below the print
+        # quantization would demand near-exact matches and spuriously fail on a
+        # different machine/arch — contrary to "bit-exactness not required".
+        tol = {"abs_tol_per_field": [max(4 * d, 0.05) for d in maxd]}
         json.dump(tol, open(a.out, "w"), indent=2)
         print(f"calibrated {tol}")
         return
