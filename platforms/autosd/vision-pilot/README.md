@@ -123,7 +123,33 @@ build it in CI and boot it locally per the Stage 2 instructions.
 
 ## Troubleshooting
 
-(SELinux / Quadlet / QEMU findings are recorded here as they are discovered)
+Findings from bringing the Quadlet smoke up on AutoSD 10 (recorded as discovered —
+capturing these before the board phase is a primary purpose of this project):
+
+- **QEMU `-cpu max` aborts under TCG.** Booting the AutoSD 10 ARMv9 UKI kernel with
+  `-accel tcg -cpu max` makes QEMU abort (`regime_is_user: code should not be
+  reached`). `run-qemu.sh` uses `-cpu cortex-a76`, which boots to login under TCG.
+- **`add_files` destinations are restricted to `/etc` and `/usr`.** aib rejects
+  paths under `/var`; the smoke data lives at `/etc/visionpilot/data`.
+- **Mount the two `.conf` files individually, not the config directory.** A
+  directory mount over `/usr/share/visionpilot/config` hides the image's
+  build-generated `H.yaml` / `homography_C_matrix.yaml` and crashes VisionPilot.
+- **`:Z` volume relabels work under AutoSD's SELinux.** AutoSD ships SELinux
+  Enforcing by default; the Quadlet mounts the config and data with `:Z` and the
+  container reads them cleanly — no manual policy was needed for read-only bind
+  mounts from `/etc`.
+- **podman + systemd double-log container stdout.** Each VisionPilot `plan:` line
+  appears twice in `journalctl -u visionpilot.service` (podman's journald driver
+  and the unit's stdout capture) as identical adjacent pairs; `assert-smoke.py
+  --dedup-consecutive` collapses them.
+- **`Type=oneshot` needs a zero exit.** Upstream VisionPilot returned the `bool`
+  from `stop()` (exit 1 on success); patch `0002` makes it return 0 so the
+  oneshot service reports `active`.
+
+Local validation of the CI-built image (x86_64 host, `-cpu cortex-a76`, TCG):
+boots to `autosd-visionpilot login:` in ~2-3 min, `visionpilot.service` reaches
+`active`, 9 planned frames are logged, and their values match the amd64 reference
+within the per-field tolerance.
 
 ### CI virtualization (arm64 runner)
 
