@@ -33,6 +33,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y podman qemu-system-arm qemu-efi-aarch64 qemu-utils expect
 
+      - name: Put container storage on a non-overlay location (aib upstream CI pattern)
+        # The runner rootfs is overlay; podman-in-container then falls back to a
+        # transient store and the aib-build helper container does not survive to
+        # the disk-image stage ("isn't in local container store"). Back the store
+        # with a real-disk bind mount, matching automotive-image-builder's own CI.
+        run: |
+          sudo rm -rf /var/lib/containers /run/containers
+          sudo mkdir -p "$RUNNER_TEMP/_containers/var" "$RUNNER_TEMP/_containers/run" /var/lib/containers /run/containers
+          sudo mount --bind "$RUNNER_TEMP/_containers/var" /var/lib/containers
+          sudo mount --bind "$RUNNER_TEMP/_containers/run" /run/containers
+
       - name: Install automotive-image-builder runner
         run: |
           curl -L -o auto-image-builder.sh \
@@ -47,7 +58,9 @@ jobs:
           # manifest's ../smoke and ../components source_paths resolve. auth.json
           # (here at /host/auth.json) lets skopeo pull the private ghcr image.
           cd platforms/autosd/vision-pilot
-          sudo AIB_PODMAN_OPTIONS="-e REGISTRY_AUTH_FILE=/host/auth.json" \
+          # Also mount the (now real-disk) /run/containers into the aib container so
+          # podman-in-container keeps a persistent, non-transient store.
+          sudo AIB_PODMAN_OPTIONS="-e REGISTRY_AUTH_FILE=/host/auth.json -v /run/containers:/run/containers" \
             bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build \
             --distro autosd10-sig --target qemu \
             --define-file aib/vars.yml \
