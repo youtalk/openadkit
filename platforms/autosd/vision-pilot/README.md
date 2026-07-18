@@ -56,10 +56,15 @@ headless-broken (aborts opening an X window) and exits non-zero on success:
 
 ```bash
 . smoke/visionpilot.env
-git clone "$VP_REPO" vp && (cd vp && git checkout "$VP_COMMIT" && git lfs pull)
+git clone "$VP_REPO" vp && (cd vp && git checkout "$VP_COMMIT")   # weights are regular files
 for p in patches/*.patch; do (cd vp && git apply "$OLDPWD/$p"); done
-docker build -f vp/VisionPilot/docker/Dockerfile.cpu -t visionpilot:cpu-amd64 vp/VisionPilot
+docker build --build-arg TARGETARCH=amd64 -f vp/VisionPilot/docker/Dockerfile.cpu -t visionpilot:cpu-amd64 vp/VisionPilot
 ```
+
+`TARGETARCH` must be passed explicitly (the Dockerfile defaults it to `amd64`, and
+a plain native build does not auto-populate it). For an arm64 image build
+`--build-arg TARGETARCH=arm64`, otherwise the build fetches the x64 ONNX Runtime
+and fails to link.
 
 Both patches are carried only until merged upstream (PRs to autoware_vision_pilot):
 
