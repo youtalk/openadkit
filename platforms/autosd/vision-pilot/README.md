@@ -101,7 +101,25 @@ history), so `--expect-frames` is 99 for the 100-frame clip and 9 for the
 
 ## Running
 
-(filled in by the QEMU tasks)
+Boot an AutoSD aarch64 disk image under QEMU:
+
+```bash
+./scripts/run-qemu.sh <disk.qcow2>
+```
+
+`run-qemu.sh` boots `qemu-system-aarch64 -machine virt` with the AAVMF UEFI
+firmware, a virtio system disk, a user-mode NIC (SSH forwarded to
+`localhost:2222`), and a serial console (`-nographic`; exit with `Ctrl-a x`).
+It autodetects acceleration: `-accel kvm -cpu host` only when the host is
+aarch64 **and** `/dev/kvm` is writable, otherwise `-accel tcg -cpu max`. On the
+x86_64 reference host it runs full TCG emulation, so an AutoSD boot to the
+`login:` prompt takes on the order of ~10 minutes.
+
+The invocation was validated on the reference host: with an empty disk QEMU
+reaches the EDK II UEFI firmware and BdsDxe boot-device selection over the
+serial console, confirming the machine type, firmware, virtio, and console
+wiring. The image of record is the **aib-built AutoSD image** (see below);
+build it in CI and boot it locally per the Stage 2 instructions.
 
 ## Troubleshooting
 
@@ -120,3 +138,15 @@ acceptable for the M=10 smoke. `scripts/run-qemu.sh` autodetects this: it uses
 > Note: a `workflow_dispatch`-only workflow cannot be dispatched from a non-default
 > branch (GitHub only registers dispatch for workflows on the default branch). The
 > probe was therefore triggered by a scoped `push` on `feat/autosd-vision-pilot`.
+
+### AutoSD nightly sample image
+
+The `autosd.sig.centos.org/AutoSD-10/nightly/sample-images/` index redirects
+downloads to an S3 bucket (`download.autosd.sig.centos.org`) that was returning
+`NoSuchKey` for the currently-listed build — i.e. the HTML index was stale
+relative to the pruned bucket, so the prebuilt nightly image could not be
+fetched. The nightly boot is only a warm-up to learn AutoSD basics; the image of
+record for this project is the reproducible **aib-built** image, which is boot-
+tested both in CI (`autosd-vision-pilot-gate`) and locally, so a nightly image is
+not required. Retry the nightly download later if a known-good QEMU baseline
+from an unmodified image is wanted.
