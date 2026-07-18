@@ -15,7 +15,7 @@ Network=host
 # and crash VisionPilot at startup.
 Volume=/etc/visionpilot/config/vision_pilot.conf:/usr/share/visionpilot/config/vision_pilot.conf:Z,ro
 Volume=/etc/visionpilot/config/vision_pilot_test.conf:/usr/share/visionpilot/config/vision_pilot_test.conf:Z,ro
-Volume=/var/lib/visionpilot/data:/data:Z,ro
+Volume=/etc/visionpilot/data:/data:Z,ro
 
 [Service]
 Type=oneshot
