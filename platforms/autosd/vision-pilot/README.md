@@ -111,9 +111,10 @@ Boot an AutoSD aarch64 disk image under QEMU:
 firmware, a virtio system disk, a user-mode NIC (SSH forwarded to
 `localhost:2222`), and a serial console (`-nographic`; exit with `Ctrl-a x`).
 It autodetects acceleration: `-accel kvm -cpu host` only when the host is
-aarch64 **and** `/dev/kvm` is writable, otherwise `-accel tcg -cpu max`. On the
-x86_64 reference host it runs full TCG emulation, so an AutoSD boot to the
-`login:` prompt takes on the order of ~10 minutes.
+aarch64 **and** `/dev/kvm` is writable, otherwise `-accel tcg -cpu cortex-a76`
+(see the Troubleshooting note on why not `-cpu max`). On the x86_64 reference
+host it runs full TCG emulation, so an AutoSD boot to the `login:` prompt takes
+on the order of a few minutes.
 
 The invocation was validated on the reference host: with an empty disk QEMU
 reaches the EDK II UEFI firmware and BdsDxe boot-device selection over the
@@ -145,6 +146,15 @@ capturing these before the board phase is a primary purpose of this project):
 - **`Type=oneshot` needs a zero exit.** Upstream VisionPilot returned the `bool`
   from `stop()` (exit 1 on success); patch `0002` makes it return 0 so the
   oneshot service reports `active`.
+- **The numeric tolerance is a functional gate, not a tight regression gate.**
+  It is calibrated from two amd64 runs (`assert-smoke.py --calibrate`), and the
+  CPU pipeline is genuinely noisy run-to-run — multi-threaded ONNX Runtime FP
+  reduction order, plus occasional MPC non-convergence that drops `tyre` to 0 —
+  so the tolerances for `tyre`/`accel`/`vel` are wide relative to those fields'
+  signal range. The check reliably catches crashes, wrong frame counts, and
+  gross divergence (and `dist` stays discriminating), but is not a tight
+  per-value regression gate. Tightening it would require pinning ORT to
+  deterministic single-threaded execution before recalibrating.
 
 Local validation of the CI-built image (x86_64 host, `-cpu cortex-a76`, TCG):
 boots to `autosd-visionpilot login:` in ~2-3 min, `visionpilot.service` reaches

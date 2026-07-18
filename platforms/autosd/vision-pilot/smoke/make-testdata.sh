@@ -9,6 +9,6 @@ IN_VIDEO="$1"; IN_SPEED="$2"; OUT="$3"; mkdir -p "$OUT"
 SPEED_EXT="${IN_SPEED##*.}"
 for n in 100 10; do
   ffmpeg -y -i "$IN_VIDEO" -vf "select='lt(n\,$n)'" -vsync 0 -an "$OUT/clip$n.mp4"
-  head -n "$n" "$IN_SPEED" > "$OUT/speed$n.$SPEED_EXT"   # one row per frame (verified in Task 4 Step 2)
+  head -n "$n" "$IN_SPEED" > "$OUT/speed$n.$SPEED_EXT"   # frame_speed.txt is one value per frame
 done
 (cd "$OUT" && sha256sum clip100.mp4 "speed100.$SPEED_EXT" clip10.mp4 "speed10.$SPEED_EXT" | tee SHA256SUMS)

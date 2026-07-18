@@ -72,8 +72,11 @@ jobs:
             --distro autosd10-sig --target qemu \
             --define-file aib/vars.yml \
             aib/image.aib.yml localhost/autosd-visionpilot:latest aib/visionpilot.qcow2
-          rm -f auth.json
           ls -lh aib/visionpilot.qcow2
+
+      - name: Remove ghcr auth file
+        if: always()
+        run: rm -f platforms/autosd/vision-pilot/auth.json
 
       - name: Boot and run the Quadlet smoke over serial
         run: |
