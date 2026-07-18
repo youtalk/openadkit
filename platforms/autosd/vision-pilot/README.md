@@ -53,3 +53,17 @@ aarch64 binfmt interpreter (`/usr/libexec/qemu-binfmt/aarch64-binfmt-P`).
 ## Troubleshooting
 
 (SELinux / Quadlet / QEMU findings are recorded here as they are discovered)
+
+### CI virtualization (arm64 runner)
+
+The `ubicloud-standard-16-arm` label works (aarch64, 16 vCPU, 49 GiB RAM). A probe
+job confirmed the runner does **not** expose `/dev/kvm` — verdict `KVM_ABSENT`
+([run](https://github.com/youtalk/openadkit/actions/runs/29624085273)). The AutoSD
+QEMU boot in CI therefore runs under same-arch TCG (no KVM acceleration), which is
+acceptable for the M=10 smoke. `scripts/run-qemu.sh` autodetects this: it uses
+`-accel kvm` only when the host is aarch64 **and** `/dev/kvm` is writable, otherwise
+`-accel tcg`.
+
+> Note: a `workflow_dispatch`-only workflow cannot be dispatched from a non-default
+> branch (GitHub only registers dispatch for workflows on the default branch). The
+> probe was therefore triggered by a scoped `push` on `feat/autosd-vision-pilot`.
