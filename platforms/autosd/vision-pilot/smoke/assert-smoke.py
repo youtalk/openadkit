@@ -25,12 +25,18 @@ PLAN_RE = re.compile(r"\bplan:\s")          # marks a per-frame plan line
 NUM_RE = re.compile(r"[-+]?\d+\.\d+")       # the six floats on a plan line
 
 
-def extract(path):
+def extract(path, dedup=False):
     frames = []
     for line in open(path, errors="replace"):
         if not PLAN_RE.search(line):
             continue
         vals = [float(v) for v in NUM_RE.findall(line)]
+        # podman+systemd can journal each container line twice (its journald log
+        # driver and the unit's stdout capture), so the serial journal shows each
+        # plan line as an identical adjacent pair. Collapse exact-equal adjacent
+        # tuples; real consecutive frames always differ (tyre is logged to 4 dp).
+        if dedup and frames and frames[-1]["values"] == vals:
+            continue
         frames.append({"frame": len(frames), "values": vals})
     return frames
 
@@ -44,6 +50,8 @@ def main():
     p.add_argument("--dump")
     p.add_argument("--calibrate", nargs=2)
     p.add_argument("--out")
+    p.add_argument("--dedup-consecutive", action="store_true",
+                   help="collapse identical adjacent plan lines (journald double-logging)")
     a = p.parse_args()
 
     # Usage validation (fail with a clear message, not a stack trace).
@@ -76,7 +84,7 @@ def main():
         print(f"calibrated {tol}")
         return
 
-    frames = extract(a.log)
+    frames = extract(a.log, dedup=a.dedup_consecutive)
     n = len(frames)
     if a.expect_frames is not None and n < a.expect_frames:
         sys.exit(f"FAIL: {n} plan frames logged, expected >= {a.expect_frames}")

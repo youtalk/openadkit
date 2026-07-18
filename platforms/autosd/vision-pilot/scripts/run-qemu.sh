@@ -6,7 +6,10 @@ DISK="$1"; shift || true
 if [ "$(uname -m)" = "aarch64" ] && [ -w /dev/kvm ]; then
   ACCEL=(-accel kvm -cpu host)
 else
-  ACCEL=(-accel tcg -cpu max)
+  # A concrete CPU model, not -cpu max: QEMU TCG aborts booting the AutoSD 10
+  # ARMv9 UKI kernel under -cpu max ("regime_is_user: code should not be
+  # reached"). cortex-a76 (ARMv8.2-A, LSE) boots AutoSD 10 to login under TCG.
+  ACCEL=(-accel tcg -cpu cortex-a76)
 fi
 CODE=/usr/share/AAVMF/AAVMF_CODE.fd
 VARS="$(mktemp --suffix=.varstore)"

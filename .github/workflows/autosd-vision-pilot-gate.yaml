@@ -87,7 +87,10 @@ jobs:
           cd platforms/autosd/vision-pilot
           # clip10 is the first 10 frames of clip100, so its 9 planned frames
           # compare against the first 9 reference entries (assert zips to shorter).
-          python3 smoke/assert-smoke.py --log /tmp/vp-session.log --expect-frames 9 \
+          # --dedup-consecutive: the container's plan lines are journaled twice
+          # (podman journald driver + the unit's stdout capture) as identical
+          # adjacent pairs; collapse them before the count/tolerance check.
+          python3 smoke/assert-smoke.py --log /tmp/vp-session.log --expect-frames 9 --dedup-consecutive \
             --reference smoke/reference/reference-amd64.json \
             --tolerance smoke/reference/tolerance.json
 
