@@ -22,7 +22,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Load pins
-        run: cat platforms/autosd/vision-pilot/smoke/visionpilot.env >> "$GITHUB_ENV"
+        # Only KEY=value lines — $GITHUB_ENV rejects the file's comment/blank lines.
+        run: grep -E '^[A-Za-z_][A-Za-z0-9_]*=' platforms/autosd/vision-pilot/smoke/visionpilot.env >> "$GITHUB_ENV"
       - name: Clone pinned VisionPilot and apply patches
         run: |
           git clone "$VP_REPO" vp
