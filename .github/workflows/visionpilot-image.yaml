@@ -1,0 +1,74 @@
+name: visionpilot-image
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - platforms/autosd/vision-pilot/**
+      - .github/workflows/visionpilot-image.yaml
+permissions:
+  contents: read
+  packages: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubicloud-standard-16
+          - arch: arm64
+            runner: ubicloud-standard-16-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load pins
+        run: cat platforms/autosd/vision-pilot/smoke/visionpilot.env >> "$GITHUB_ENV"
+      - name: Clone pinned VisionPilot and apply patches
+        run: |
+          git clone "$VP_REPO" vp
+          cd vp
+          git checkout "$VP_COMMIT"
+          # ONNX weights are regular committed files at this pin (not git-lfs).
+          # Headless + zero-exit fixes; carried until upstreamed. Must be applied
+          # before the build or the image aborts on startup / exits 1 on success.
+          for p in "$GITHUB_WORKSPACE"/platforms/autosd/vision-pilot/patches/*.patch; do
+            echo "applying $(basename "$p")"
+            git apply "$p"
+          done
+      - name: Build image
+        # TARGETARCH must be passed explicitly: the Dockerfile defaults it to
+        # amd64, and a plain (non-buildx) native build does not auto-populate it,
+        # so on the arm64 runner it would otherwise fetch the x64 ONNX Runtime and
+        # fail to link ("libonnxruntime.so: file in wrong format").
+        run: docker build --build-arg "TARGETARCH=${{ matrix.arch }}" -f vp/VisionPilot/docker/Dockerfile.cpu -t "vp:cpu-${{ matrix.arch }}" vp/VisionPilot
+      - name: Native smoke (N=100 -> 99 planned frames)
+        run: |
+          cd platforms/autosd/vision-pilot
+          ./smoke/fetch-testdata.sh /tmp/vp-data 100
+          . ./smoke/testdata.env
+          cp /tmp/vp-data/clip100.mp4 /tmp/vp-data/clip.mp4
+          cp "/tmp/vp-data/speed100.$SPEED_EXT" /tmp/vp-data/speed.txt
+          # Mount the two .conf files individually so the image's generated
+          # config (H.yaml, homography_C_matrix.yaml) is preserved.
+          docker run --rm -v /tmp/vp-data:/data:ro \
+            -v "$PWD/smoke/config/vision_pilot.conf:/usr/share/visionpilot/config/vision_pilot.conf:ro" \
+            -v "$PWD/smoke/config/vision_pilot_test.conf:/usr/share/visionpilot/config/vision_pilot_test.conf:ro" \
+            "vp:cpu-${{ matrix.arch }}" 2>&1 | tee /tmp/run.log
+          python3 smoke/assert-smoke.py --log /tmp/run.log --expect-frames 99 \
+            --reference smoke/reference/reference-amd64.json \
+            --tolerance smoke/reference/tolerance.json
+      - name: Push per-arch tag
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker tag "vp:cpu-${{ matrix.arch }}" "ghcr.io/youtalk/visionpilot:cpu-${{ matrix.arch }}"
+          docker push "ghcr.io/youtalk/visionpilot:cpu-${{ matrix.arch }}"
+  merge:
+    needs: build
+    runs-on: ubicloud-standard-2
+    steps:
+      - name: Create multi-arch manifest
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker buildx imagetools create -t ghcr.io/youtalk/visionpilot:cpu \
+            ghcr.io/youtalk/visionpilot:cpu-amd64 ghcr.io/youtalk/visionpilot:cpu-arm64
+          docker buildx imagetools inspect ghcr.io/youtalk/visionpilot:cpu
