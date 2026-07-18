@@ -1,5 +1,13 @@
 name: spike-arm64-kvm
-on: workflow_dispatch
+# workflow_dispatch alone is not runnable here: GitHub only exposes dispatch for
+# workflows present on the default branch, and this temporary probe lives only on
+# feat/autosd-vision-pilot. Trigger on push to this branch, scoped to this file so
+# it does not re-run on later task pushes. Deleted in Task 9.
+on:
+  push:
+    branches: [feat/autosd-vision-pilot]
+    paths: ['.github/workflows/spike-arm64-kvm.yaml']
+  workflow_dispatch:
 jobs:
   probe:
     runs-on: ubicloud-standard-16-arm
