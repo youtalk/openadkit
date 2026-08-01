@@ -17,9 +17,16 @@ make defconfig
 scripts/kconfig/merge_config.sh -m .config "$HERE/bsp-mimic.config"
 make olddefconfig
 # Assert the constraint set actually landed (defconfig may re-enable things).
-for on in EXT4_FS TMPFS_XATTR BTRFS_FS OVERLAY_FS BLK_DEV_LOOP NETFILTER_XTABLES \
-          IP_NF_IPTABLES IP_NF_NAT IP_NF_TARGET_MASQUERADE BRIDGE VETH TUN \
-          VIRTIO_BLK VIRTIO_NET SERIAL_AMBA_PL011_CONSOLE; do
+# Covers every symbol sections (b) and (c) of the fragment declare as =y, so a
+# tristate-capped-by-a-=m-parent divergence (like BRIDGE/IPV6) can't land silently.
+for on in EXT4_FS EXT4_FS_POSIX_ACL TMPFS TMPFS_XATTR TMPFS_POSIX_ACL BTRFS_FS OVERLAY_FS \
+          BLK_DEV_LOOP USER_NS SECCOMP SECCOMP_FILTER MEMCG CGROUP_PIDS IPV6 \
+          NETFILTER NETFILTER_XTABLES NF_CONNTRACK NF_NAT \
+          IP_NF_IPTABLES IP_NF_FILTER IP_NF_NAT IP_NF_TARGET_MASQUERADE IP6_NF_IPTABLES \
+          NETFILTER_XT_MARK NETFILTER_XT_MATCH_ADDRTYPE NETFILTER_XT_MATCH_CONNTRACK \
+          IP_NF_MANGLE IP6_NF_MANGLE NETFILTER_XT_TARGET_CHECKSUM BRIDGE VETH TUN \
+          VIRTIO VIRTIO_PCI VIRTIO_BLK VIRTIO_NET VIRTIO_CONSOLE HW_RANDOM HW_RANDOM_VIRTIO \
+          SERIAL_AMBA_PL011 SERIAL_AMBA_PL011_CONSOLE RTC_DRV_PL031; do
   grep -q "^CONFIG_${on}=y" .config || { echo "FATAL: CONFIG_${on} not =y"; exit 1; }
 done
 for off in SECURITY_SELINUX EXT4_FS_SECURITY NF_TABLES EROFS_FS DM_VERITY \
