@@ -27,11 +27,16 @@ jobs:
   build-and-gate:
     runs-on: ubicloud-standard-16-arm
     # Generous but bounded: the job is expected to run for hours (aib build,
-    # a from-scratch kernel compile, emulated container builds, a TCG QEMU
-    # boot) -- well below the 360-minute platform default, so a genuinely
-    # stuck step (a hung prompt, a runaway retry loop) fails within a single
-    # working session instead of silently occupying the runner.
-    timeout-minutes: 180
+    # a from-scratch kernel compile, docker build/skopeo for the test
+    # images -- both native on this arm64 runner, not emulated, so cheaper
+    # than the platform-generic worst case -- and a TCG QEMU boot, whose
+    # gate alone budgets up to 1800s to a login prompt plus a 900s
+    # inactivity window per marker). 240 stays well below the 360-minute
+    # platform default while giving that worst case real headroom, so a
+    # genuinely stuck step (a hung prompt, a runaway retry loop) fails
+    # within a single working session instead of the ceiling itself
+    # wasting the whole cycle with no diagnostic.
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
 
@@ -100,22 +105,34 @@ jobs:
           sudo podman rm "$cid"
           ls -lh aib/x5h-rootfs.tar
 
-      - name: Inspect the tar export (podman present, btrfs-progs present, no ostree/composefs content)
-        # Anchored at a path component boundary: an unanchored grep for
-        # e.g. "usr/bin/podman" would also match
-        # "ostree/deploy/.../usr/bin/podman", which defeats the purpose of
-        # the ostree/composefs check below. This is now also the guard that
-        # tells us whether dropping the old --mode package flag (which no
-        # longer exists) cost us the non-ostree property of the export --
-        # if it comes out ostree-shaped, that's a real finding to fail on,
-        # not something to relax.
+      - name: Inspect the tar export (podman present, btrfs-progs present, no ostree-repo layout)
+        # Positive checks anchored at a path component boundary: an
+        # unanchored grep for e.g. "usr/bin/podman" would also match
+        # "ostree/deploy/.../usr/bin/podman".
+        #
+        # The ostree/composefs guard is anchored at the archive *root*,
+        # not "anywhere in the path". bootc.spec Requires both ostree and
+        # composefs, so every aib build output -- ordinary or not --
+        # always carries usr/lib/ostree/ostree-prepare-root,
+        # usr/lib/ostree/ostree-remount and usr/bin/composefs-info. A
+        # path-anywhere match on "ostree/" or "composefs" is therefore
+        # unconditionally true for every export and tells us nothing; it
+        # would turn "dropping --mode package cost us the non-ostree
+        # property" into a guaranteed false alarm on every run. The
+        # genuine failure mode this guard exists to catch is a top-level
+        # ostree/repo/objects/... (or sysroot/ostree/...) layout, which
+        # only a root anchor can distinguish from those ordinary package
+        # files -- if it fires, that's a real finding to fail on, not
+        # something to relax.
         run: |
           cd platforms/autosd/x5h
           tar tf aib/x5h-rootfs.tar | head -50
           tar tf aib/x5h-rootfs.tar | grep -qE '(^|/)usr/bin/podman' || { echo "FATAL: no podman"; exit 1; }
           tar tf aib/x5h-rootfs.tar | grep -qE '(^|/)usr/s?bin/mkfs\.btrfs' || { echo "FATAL: no btrfs-progs"; exit 1; }
-          if tar tf aib/x5h-rootfs.tar | grep -qE '(^|/)ostree/|/composefs'; then
-            echo "FATAL: ostree content in the podman-exported rootfs"
+          echo "--- ostree/composefs packages present (expected on a bootc image, informational only) ---"
+          tar tf aib/x5h-rootfs.tar | grep -E '(^|/)(ostree|composefs)' || true
+          if tar tf aib/x5h-rootfs.tar | grep -qE '^(\./)?(ostree|sysroot/ostree)/'; then
+            echo "FATAL: ostree-repo layout detected in the podman-exported rootfs"
             exit 1
           fi
 
@@ -128,7 +145,14 @@ jobs:
           sudo mkfs.ext4 -q aib/x5h-rootfs.ext4
           mnt="$(mktemp -d)"
           sudo mount -o loop aib/x5h-rootfs.ext4 "$mnt"
-          sudo tar xf aib/x5h-rootfs.tar -C "$mnt"
+          # --xattrs: plain `tar xf` silently drops extended attributes on
+          # extract (exit 0, no warning) even when the archive carries
+          # them, so security.capability on e.g. newuidmap/newgidmap/ping
+          # would otherwise vanish here. Safe specifically because this
+          # step runs on the CI host's ext4 (which has EXT4_FS_SECURITY),
+          # not the BSP-mimic target the gate boots -- GATE2 exists
+          # precisely because that restore fails on the constrained kernel.
+          sudo tar --xattrs --xattrs-include='*.*' -xf aib/x5h-rootfs.tar -C "$mnt"
           sudo umount "$mnt"
           rmdir "$mnt"
 
