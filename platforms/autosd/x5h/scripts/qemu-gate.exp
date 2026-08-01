@@ -1,33 +1,75 @@
 #!/usr/bin/expect -f
 # Drive the x5h QEMU gate: login, run gate-guest.sh, save the session log.
 # Usage: qemu-gate.exp <run-qemu-gate.sh> <Image> <rootfs.ext4> <blank-disk> <logfile>
-set timeout 1800
 set runner [lindex $argv 0]
 set kimg   [lindex $argv 1]
 set rootfs [lindex $argv 2]
 set blank  [lindex $argv 3]
 set logf   [lindex $argv 4]
 log_file -noappend $logf
+
 spawn $runner $kimg $rootfs $blank
+
+# Boot can legitimately take a while under TCG (especially cross-arch on
+# x86 in Task 7), so this first wait keeps a generous fixed budget.
+set timeout 1800
 expect {
     -re "login:" {}
-    timeout { puts "FATAL: no login prompt"; exit 2 }
+    eof { puts "FATAL: qemu exited before a login prompt appeared (check runner logs / kernel path)"; exit 2 }
+    timeout { puts "FATAL: no login prompt within ${timeout}s"; exit 2 }
 }
 send "root\r"
-expect "Password:" { send "autosd\r" }
-expect -re {[#$] $} {}
+
+# Short, bounded interactive exchange: either a password prompt (send it)
+# or, on an autologin console, we land straight on a shell prompt.
+set timeout 60
+expect {
+    "Password:" { send "autosd\r" }
+    -re {[#$] $} { set already_at_prompt 1 }
+    eof { puts "FATAL: guest console closed while waiting for the password prompt"; exit 2 }
+    timeout { puts "FATAL: no password prompt (or shell prompt) after sending username"; exit 2 }
+}
+if {![info exists already_at_prompt]} {
+    expect {
+        -re {[#$] $} {}
+        eof { puts "FATAL: guest console closed while waiting for the shell prompt after login"; exit 2 }
+        timeout { puts "FATAL: no shell prompt after sending the password"; exit 2 }
+    }
+}
 send "sh /var/lib/autosd-test/gate-guest.sh\r"
+
+# The guest-side run does several podman loads, an mkfs.btrfs, and two
+# poll-and-curl cycles -- its total length varies with TCG speed and isn't a
+# meaningful thing to budget as one fixed number. Instead, re-arm an
+# inactivity timer on every complete "GATE<n>_..." marker line, so a run
+# that's merely slow keeps proceeding while a run that goes truly silent (or
+# whose guest dies) still fails fast and with a clear diagnostic.
+set inactivity_timeout 300
+set timeout $inactivity_timeout
 expect {
     "GATE_DONE" {}
-    timeout { puts "FATAL: gate did not finish"; exit 2 }
+    -re {GATE[0-9]_[^\r\n]*\r?\n} { exp_continue }
+    eof { puts "FATAL: guest console closed before GATE_DONE"; exit 2 }
+    timeout { puts "FATAL: gate produced no new marker output for ${inactivity_timeout}s (stalled)"; exit 2 }
 }
-expect -re {[#$] $} {}
+
+set timeout 60
+expect {
+    -re {[#$] $} {}
+    eof { puts "FATAL: guest console closed while waiting for the shell prompt after the gate run"; exit 2 }
+    timeout { puts "FATAL: no shell prompt after the gate run finished"; exit 2 }
+}
 send "poweroff\r"
-expect eof
+set timeout 60
+expect {
+    eof {}
+    timeout { puts "WARN: guest did not power off within ${timeout}s; continuing to judge captured markers" }
+}
+
 # Judge the markers from the captured log.
 set fh [open $logf r]; set log [read $fh]; close $fh
 set fail 0
-foreach must {GATE1_LOGIN_OK GATE3_TMPFS_OK GATE4_BTRFS_OK GATE_DONE} {
+foreach must {GATE1_LOGIN_OK GATE3_TMPFS_OK GATE3_STORE_FS=tmpfs GATE4_BTRFS_OK GATE4_STORE_FS=btrfs GATE_DONE} {
     if {![string match "*$must*" $log]} { puts "MISSING: $must"; set fail 1 }
 }
 if {![string match "*GATE2_EXT4_FAIL_OK*" $log] && ![string match "*GATE2_EXT4_UNEXPECTED_PASS*" $log]} {

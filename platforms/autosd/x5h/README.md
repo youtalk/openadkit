@@ -36,11 +36,16 @@ results page):
 | --- | --- |
 | `GATE1_LOGIN_OK` | Guest login succeeded. |
 | `GATE1_SYSTEMD_STATE=<state>` | `systemctl is-system-running` output, informational. |
+| `GATE2_STORE_FS=<fstype>` | Filesystem podman's store actually sat on for the GATE2 probe (expected `ext4`, since GATE2 mounts nothing). Informational — recorded so a reader can see what the GATE2 verdict was measured against, not gated on. |
 | `GATE2_EXT4_FAIL_OK` | Podman image load on the ext4 root failed with an unsupported-xattr error — confirms the `EXT4_FS_SECURITY` blocker. |
 | `GATE2_EXT4_FAIL_OTHER` | Podman image load on the ext4 root failed for an unrelated reason. |
 | `GATE2_EXT4_UNEXPECTED_PASS` | Podman image load on the ext4 root succeeded unexpectedly. |
+| `GATE3_STORE_FS=<fstype>` | Filesystem podman's store actually sat on for the GATE3 probe. **Required to equal `tmpfs`** — otherwise a silently-failed tmpfs mount could fall through to the ext4 root underneath and still print `GATE3_TMPFS_OK` for the wrong reason. |
 | `GATE3_TMPFS_OK` | Podman container store on tmpfs works, including the capability xattr round-trip. |
+| `GATE3_FAIL` | The tmpfs-store probe failed. Not part of the pass path; printed instead of `GATE3_TMPFS_OK` so a human reading the raw log sees why that marker is missing. |
+| `GATE4_STORE_FS=<fstype>` | Filesystem podman's store actually sat on for the GATE4 probe. **Required to equal `btrfs`**, for the same reason as GATE3's. |
 | `GATE4_BTRFS_OK` | Podman container store on a btrfs-formatted second disk works. |
+| `GATE4_FAIL` | The btrfs-store probe failed. Not part of the pass path; printed instead of `GATE4_BTRFS_OK`, same rationale as `GATE3_FAIL`. |
 | `GATE5_IPTABLES_OK` | Container networking works with the `iptables` firewall driver. |
 | `GATE5_NONE_OK` | Container networking works with the `firewall_driver = "none"` fallback. |
 | `GATE5_FAIL` | Neither the iptables driver nor the none-fallback produced working networking. |
@@ -56,12 +61,33 @@ Two markers are deliberately **either/or**, not single-verdict:
   a reason the plan did not anticipate, and that needs a human to look at it.
 - **GATE5 accepts either** the `iptables` firewall driver working or the
   documented `firewall_driver = "none"` fallback with a direct container IP.
-  `GATE5_FAIL` means neither path produced working container networking.
+  `GATE5_FAIL` means neither path produced working container networking. The
+  fallback drop-in (`99-gate-fallback.conf`) that path writes is removed
+  again at the end of GATE5 regardless of outcome, since Task 8 copies
+  `gate-guest.sh` onto the board's persistent NFS root and a leftover
+  drop-in there would silently shadow Task 2's `50-x5h.conf` for good; which
+  path was taken is already on the record via the `GATE5_*` marker itself.
+
+`GATE3_STORE_FS=tmpfs` and `GATE4_STORE_FS=btrfs` exist because GATE3/GATE4's
+mount step (`mount -t tmpfs …` / `mkfs.btrfs` + `mount /dev/vdb …`) checks no
+exit status and `gate-guest.sh` never aborts on a failed mount — without this
+check, a silently-failed mount would leave `/var/lib/containers` on whatever
+was mounted there before (typically the ext4 root), and the podman probe that
+follows would still validly pass or fail, just against the wrong filesystem,
+printing a `GATE3_TMPFS_OK` / `GATE4_BTRFS_OK` that didn't actually exercise
+tmpfs/btrfs at all.
 
 The overall gate (`qemu-gate.exp`) exits 0 only if `GATE1_LOGIN_OK`,
-`GATE3_TMPFS_OK`, `GATE4_BTRFS_OK`, `GATE_DONE`, one of the GATE2 accepted
-markers, and one of the GATE5 accepted markers are all present in the
-session log.
+`GATE3_TMPFS_OK`, `GATE3_STORE_FS=tmpfs`, `GATE4_BTRFS_OK`,
+`GATE4_STORE_FS=btrfs`, `GATE_DONE`, one of the GATE2 accepted markers, and
+one of the GATE5 accepted markers are all present in the session log.
+
+`qemu-gate.exp` waits for the guest-side run with an inactivity timeout (5
+minutes with no new `GATE<n>_…` marker line, re-armed on every marker) rather
+than one fixed budget for the whole run: the run's total length varies with
+TCG emulation speed and isn't a meaningful thing to cap as a single number,
+but a guest that goes genuinely silent, or dies outright, still fails fast
+with a clear diagnostic instead of a generic "gate did not finish".
 
 ## Board bring-up
 
