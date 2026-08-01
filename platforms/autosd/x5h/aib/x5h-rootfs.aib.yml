@@ -1,0 +1,23 @@
+name: x5h-rootfs
+
+image:
+  hostname: autosd-x5h
+  image_size: 6 GiB
+
+content:
+  rpms:
+    - podman
+    - btrfs-progs
+    - gdisk
+    - curl
+    - iproute
+    - procps-ng
+    - iptables-nft
+  add_files:
+    # add_files only permits /etc and /usr destinations (rehearsal finding).
+    - source_path: ../config/50-x5h.conf
+      path: /etc/containers/containers.conf.d/50-x5h.conf
+
+auth:
+  # root password "autosd" — dev/bench image only, never a board deliverable.
+  root_password: '$6$G8EEOdazon1o20yt$T22wsSokbA6eqYp86lCfEOSxNErCZkUjFNJfigB.PF4ijgJTzbrDA4GNHKNufhBc1vyiLm6Be7Elb16olXv590'
