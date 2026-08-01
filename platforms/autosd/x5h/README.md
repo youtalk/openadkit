@@ -138,12 +138,16 @@ new `bootcmd_autosd` variable is added, from the `uboot/autosd-boot.env` templat
 The template's `${...}` placeholders are of two kinds: `serverip`, `kernel_addr_r`, and
 `fdt_addr_r` are already defined by this board's U-Boot environment (built-ins); the rest
 (`autosd_export_path`, `bootargs_bsp`, `board_ip_config`, `dtb_file`) are operator-supplied
-from `x5h-work/HANDOFF.md` (not committed to this repo) and must be `setenv` at the prompt
-*before* entering the template's `bootargs_autosd` line — that line is double-quoted, so
-U-Boot expands it immediately at `setenv` time, and any placeholder that isn't set yet
-silently expands to empty rather than erroring. After entering all three lines, read back
-`printenv bootargs_autosd` and confirm it looks complete, then boot the AutoSD NFS root
-with:
+from `x5h-work/HANDOFF.md` (not committed to this repo) and must all be `setenv` at the
+prompt **before the first line of the template**, not merely before `bootargs_autosd` —
+`autosd_export_path` is consumed by the *first* line (`autosd_nfsroot`), which is unquoted
+and therefore expands immediately, exactly like the double-quoted `bootargs_autosd` line
+that follows it. Setting `autosd_export_path` only after `autosd_nfsroot` has already run
+still bakes an empty export path into it (`nfsroot=<ip>:,vers=3,tcp`), and that string is
+plausible enough to pass a casual glance. After entering all three lines, read back
+`printenv autosd_nfsroot bootargs_autosd` and check that the export path and the `ip=`
+config are actually present in the output — not just that the strings "look complete" —
+then boot the AutoSD NFS root with:
 
 ```
 run bootcmd_autosd
@@ -163,19 +167,33 @@ board-podman-smoke.sh tmpfs                                        # zero board 
 board-podman-smoke.sh btrfs /dev/disk/by-partlabel/autosd-store     # writes the LUN
 ```
 
-A genuine `tmpfs` pass stamps `/run/x5h-smoke-tmpfs-passed` (cleared by a power cycle, since
-`/run` is tmpfs); `btrfs` checks for that stamp before touching anything and prints
-`SMOKE_btrfs_TMPFS_GATE_FAIL` and exits if it is missing. If you deliberately need to run
-`btrfs` alone — e.g. after a reboot cleared the stamp but you already know `tmpfs` is fine —
-either re-run `tmpfs` again (it costs nothing) or `touch /run/x5h-smoke-tmpfs-passed` by
-hand to override.
+A genuine `tmpfs` pass stamps `/run/x5h-smoke-tmpfs-passed` before printing
+`SMOKE_tmpfs_PASS`; `btrfs` checks for that stamp before touching anything and prints
+`SMOKE_btrfs_TMPFS_GATE_FAIL` and exits if it is missing. The stamp lands in `/run` and
+nowhere else because this boot has no initrd — U-Boot loads only `Image` and the DTB, so PID
+1 mounts `/run` itself as an API tmpfs — which is what makes the interlock genuinely
+boot-scoped: it is cleared by a power cycle, not merely by an `rm`. (If `/run` were ever
+*not* a mount here, the stamp would instead land on the NFS server's copy of the export and
+would survive power cycles and sessions, silently pre-authorizing a `btrfs` write on a cold
+boot — so this is worth re-confirming if the boot path ever changes.) A failed unmount at the
+end of a `tmpfs` run withholds the stamp even though `SMOKE_tmpfs_PASS` still prints (the
+podman/network result it reports is genuine; only the "board left clean" promise the stamp
+makes is at stake) — its own `SMOKE_tmpfs_UMOUNT_WARN` marker says so. If you deliberately
+need to run `btrfs` alone — e.g. after a reboot cleared the stamp but you already know
+`tmpfs` is fine — either re-run `tmpfs` again (it costs nothing) or
+`touch /run/x5h-smoke-tmpfs-passed` by hand to override.
 
 Each phase prints `SMOKE_<mode>_STORE_FS=<fstype>` right after its mount succeeds (mirroring
 `gate-guest.sh`'s `GATE3_STORE_FS`/`GATE4_STORE_FS`) — check it reads `tmpfs` / `btrfs`
 respectively, not whatever was mounted underneath, before trusting a later `_PASS`. Every run
-terminates in exactly one of `SMOKE_<mode>_PASS` or `SMOKE_<mode>_FAIL`; grep for that pair
-rather than assuming silence, or a printed `_FAIL` marker earlier in the log, means the run
-already stopped.
+ends in one of: `SMOKE_<mode>_PASS`; `SMOKE_<mode>_FAIL` (a podman or network check failed);
+`SMOKE_<mode>_MODPROBE_FAIL`; `SMOKE_<mode>_MOUNT_FAIL`; or, `btrfs` only,
+`SMOKE_<mode>_DEV_FAIL` (bad block device) or `SMOKE_<mode>_TMPFS_GATE_FAIL` (no prior
+`tmpfs` pass) — except an invalid or missing mode argument, which prints a plain
+`usage: ...` line and exits 2 with **no** `SMOKE_` marker at all, since the script hasn't
+chosen a `$MODE` to prefix one with yet. Grep for the full set; if you see none of them, the
+run stopped before producing anything trustworthy — treat that the same as a failure, not as
+a pass.
 
 `btrfs` is the only step in this task that writes to physical storage — the previously-empty
 32 GB UFS LUN. Partitioning that LUN (creating the GPT label) and formatting it

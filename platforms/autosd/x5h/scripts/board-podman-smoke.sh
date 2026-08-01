@@ -10,6 +10,11 @@ set -x
 T=/var/lib/autosd-test
 TMPFS_STAMP=/run/x5h-smoke-tmpfs-passed
 MODE="$1"
+# Created up front, same reason as gate-guest.sh:10 -- an exported rootfs
+# with no kernel package may not carry this directory, and mounting onto a
+# nonexistent mountpoint should fail as a clear SMOKE_*_MOUNT_FAIL below, not
+# as a confusing "mount point does not exist" with no marker at all.
+mkdir -p /var/lib/containers
 case "$MODE" in
 tmpfs)
     # modprobe(8) is "modprobe [modulename] [module parameters...]" -- without
@@ -32,7 +37,7 @@ btrfs)
         exit 1
     fi
     DEV="$2"
-    [ -b "$DEV" ] || { echo "FATAL: $DEV is not a block device"; exit 1; }
+    [ -b "$DEV" ] || { echo "SMOKE_${MODE}_DEV_FAIL ($DEV is not a block device)"; exit 1; }
     modprobe -a btrfs overlay veth bridge br_netfilter \
         || { echo "SMOKE_${MODE}_MODPROBE_FAIL"; exit 1; }
     mount "$DEV" /var/lib/containers \
@@ -75,10 +80,18 @@ if [ -z "$FAIL" ]; then
 fi
 
 # tmpfs is the zero-mutation phase: leave the board as found so a later btrfs
-# run doesn't stack its mount on top of a still-mounted tmpfs store.
+# run doesn't stack its mount on top of a still-mounted tmpfs store. A failed
+# unmount does not change the podman/network verdict above (SMOKE_*_PASS
+# still reports that truthfully), but it DOES withhold the interlock stamp
+# below: the stamp's job is to promise "the board was left clean," and a
+# stuck tmpfs mount breaks that promise even when podman itself worked.
+UMOUNT_OK=
 if [ "$MODE" = "tmpfs" ]; then
-    umount /var/lib/containers \
-        || echo "SMOKE_${MODE}_UMOUNT_WARN (stale tmpfs mount may remain over the ext4 root)"
+    if umount /var/lib/containers; then
+        UMOUNT_OK=1
+    else
+        echo "SMOKE_${MODE}_UMOUNT_WARN (stale tmpfs mount may remain over the ext4 root; tmpfs-pass stamp withheld)"
+    fi
 fi
 
 if [ -n "$FAIL" ]; then
@@ -86,8 +99,8 @@ if [ -n "$FAIL" ]; then
     exit 1
 fi
 
-# Only a genuine, complete tmpfs pass unlocks the btrfs arm.
-if [ "$MODE" = "tmpfs" ]; then
+# Only a genuine, complete tmpfs pass AND a clean unmount unlock the btrfs arm.
+if [ "$MODE" = "tmpfs" ] && [ -n "$UMOUNT_OK" ]; then
     : > "$TMPFS_STAMP"
 fi
 echo "SMOKE_${MODE}_PASS"
