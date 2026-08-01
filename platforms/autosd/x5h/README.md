@@ -98,7 +98,64 @@ declaration for the full arithmetic; it is coupled to GATE5's poll bounds in
 
 ## Board bring-up
 
-(filled in by the board-prep task; operational values live outside this repo)
+Board time is scarce and one-shot — no rerun scheduled. The order below encodes the plan's
+board-safety invariants; do not reorder it.
+
+### 1. Stage the AutoSD NFS root
+
+The CI workflow uploads a flat artifact bundle, not a nested one, so find the tarball rather
+than assuming a fixed path:
+
+```bash
+find /tmp/x5h-bundle -name x5h-rootfs.tar
+```
+
+Then, as root on the NFS server host:
+
+```bash
+scripts/stage-nfs-rootfs.sh <x5h-rootfs.tar> <bsp-rootfs-dir> <dest-dir> <testimages-dir>
+```
+
+`<bsp-rootfs-dir>` is the existing BSP NFS root — it is only ever read from (to copy
+`/lib/modules/6.1.102-yocto-standard`, since overlayfs/veth/bridge/x_tables are all `=m` on
+the BSP kernel), never modified. The script refuses to run if `<dest-dir>` already exists,
+and prints `OK: staged at <dest-dir>` on success. Add the new export to `/etc/exports`
+(mirror the existing BSP export line's options) and run `exportfs -ra`.
+
+### 2. U-Boot: `printenv` backup, then `bootcmd_autosd`
+
+Before touching the U-Boot environment, capture a full `printenv` to the session log — this
+is what makes the next step reversible. The default `bootcmd` is **never** modified; only a
+new `bootcmd_autosd` variable is added, from the `uboot/autosd-boot.env` template. Fill its
+`${...}` placeholders with the site values in `x5h-work/HANDOFF.md` (not committed to this
+repo) and enter each line at the U-Boot prompt, then boot the AutoSD NFS root with:
+
+```
+run bootcmd_autosd
+```
+
+At the end of the session, re-verify the unmodified BSP boot path still works (power cycle,
+default `bootcmd`, BSP NFS root) before releasing the board.
+
+### 3. On-board podman smoke: tmpfs before btrfs
+
+`scripts/board-podman-smoke.sh` is staged onto the NFS root under `/var/lib/autosd-test/`
+by step 1. It runs in two phases, and the order is a safety invariant, not a suggestion:
+
+```bash
+board-podman-smoke.sh tmpfs                                        # zero board mutation
+board-podman-smoke.sh btrfs /dev/disk/by-partlabel/autosd-store     # writes the LUN
+```
+
+`tmpfs` must print `SMOKE_tmpfs_PASS` before `btrfs` is attempted. `btrfs` is the only step
+in this task that writes to physical storage — the previously-empty 32 GB UFS LUN. Creating
+the GPT label on that LUN is a deliberate manual, eyes-on step done at the board prompt
+itself, not by this script: the point where the operator confirms by hand that `$DEV` names
+the right disk before anything is written to it.
+
+Site values — server IP, export paths, the `ip=` kernel argument, and the DTB filename —
+live in `x5h-work/HANDOFF.md` on the operator's machine and are never committed to this
+repo.
 
 ## Troubleshooting
 
