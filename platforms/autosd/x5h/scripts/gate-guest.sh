@@ -4,6 +4,10 @@
 # netavark without nftables. Never exits nonzero mid-way — every assertion
 # reports a marker and GATE_DONE always prints; the host side judges markers.
 T=/var/lib/autosd-test
+# Created up front so the very first GATE2_STORE_FS read below (which runs
+# before podman has touched anything) doesn't hit a nonexistent path and
+# come back empty; GATE3/GATE4 mount over this same directory later.
+mkdir -p /var/lib/containers
 
 echo GATE1_LOGIN_OK
 echo "GATE1_SYSTEMD_STATE=$(systemctl is-system-running 2>/dev/null)"
@@ -12,8 +16,10 @@ systemctl --failed --no-legend 2>/dev/null | head -20
 # --- GATE2: default store on the ext4 root (EXT4_FS_SECURITY absent) ---
 # GATE2_STORE_FS is informational only: it records which filesystem the
 # verdict below was actually measured against (no mount is performed here,
-# so this should read "ext4" -- the root export's own filesystem).
-echo "GATE2_STORE_FS=$(findmnt -no FSTYPE --target /var/lib/containers)"
+# so this should read "ext4" -- the root export's own filesystem). `tail -1`
+# because findmnt --target lists the whole mount stack (oldest first) when
+# the mountpoint has been covered by a later mount -- see GATE3/GATE4 below.
+echo "GATE2_STORE_FS=$(findmnt -no FSTYPE --target /var/lib/containers | tail -1)"
 if podman load -i "$T/captest-docker.tar" >/tmp/g2.log 2>&1; then
     echo GATE2_EXT4_UNEXPECTED_PASS
 else
@@ -27,12 +33,13 @@ fi
 podman rmi -af >/dev/null 2>&1
 
 # --- GATE3: tmpfs store (TMPFS_XATTR=y on BSP kernel too) ---
-mkdir -p /var/lib/containers
 mount -t tmpfs -o size=2g tmpfs /var/lib/containers
 # GATE3_STORE_FS is required by the host: it proves the podman probe below
 # actually ran against tmpfs, not a silently-failed mount that fell through
 # to whatever was mounted at /var/lib/containers before (i.e. the ext4 root).
-echo "GATE3_STORE_FS=$(findmnt -no FSTYPE --target /var/lib/containers)"
+# `tail -1` picks the effective (most-recently-mounted, topmost) filesystem
+# if the mount above failed and findmnt reports a stack instead of one line.
+echo "GATE3_STORE_FS=$(findmnt -no FSTYPE --target /var/lib/containers | tail -1)"
 if podman load -i "$T/captest-docker.tar" >/tmp/g3.log 2>&1 \
    && podman run --rm localhost/x5h-captest:latest getcap /usr/bin/ping | grep -q cap_net_raw; then
     echo GATE3_TMPFS_OK
@@ -46,8 +53,9 @@ umount /var/lib/containers
 mkfs.btrfs -f /dev/vdb >/dev/null 2>&1
 mount /dev/vdb /var/lib/containers
 # GATE4_STORE_FS is required by the host for the same reason as GATE3's: it
-# proves the probe ran against btrfs, not a leftover/fallback mount.
-echo "GATE4_STORE_FS=$(findmnt -no FSTYPE --target /var/lib/containers)"
+# proves the probe ran against btrfs, not a leftover/fallback mount. `tail -1`
+# for the same reason as GATE3's -- pick the effective top-of-stack mount.
+echo "GATE4_STORE_FS=$(findmnt -no FSTYPE --target /var/lib/containers | tail -1)"
 if podman load -i "$T/captest-docker.tar" >/tmp/g4.log 2>&1 \
    && podman run --rm localhost/x5h-captest:latest getcap /usr/bin/ping | grep -q cap_net_raw; then
     echo GATE4_BTRFS_OK

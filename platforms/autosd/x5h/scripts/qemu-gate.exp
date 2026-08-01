@@ -11,29 +11,36 @@ log_file -noappend $logf
 spawn $runner $kimg $rootfs $blank
 
 # Boot can legitimately take a while under TCG (especially cross-arch on
-# x86 in Task 7), so this first wait keeps a generous fixed budget.
+# x86 in Task 7), so this first wait keeps a generous fixed budget. A true
+# autologin console never prints "login:" at all, so a bare shell prompt is
+# accepted here too (Task 2 does set a root password, so this is a belt and
+# braces case, not the expected path).
 set timeout 1800
 expect {
     -re "login:" {}
+    -re {[#$] $} { set already_logged_in 1 }
     eof { puts "FATAL: qemu exited before a login prompt appeared (check runner logs / kernel path)"; exit 2 }
     timeout { puts "FATAL: no login prompt within ${timeout}s"; exit 2 }
 }
-send "root\r"
 
-# Short, bounded interactive exchange: either a password prompt (send it)
-# or, on an autologin console, we land straight on a shell prompt.
-set timeout 60
-expect {
-    "Password:" { send "autosd\r" }
-    -re {[#$] $} { set already_at_prompt 1 }
-    eof { puts "FATAL: guest console closed while waiting for the password prompt"; exit 2 }
-    timeout { puts "FATAL: no password prompt (or shell prompt) after sending username"; exit 2 }
-}
-if {![info exists already_at_prompt]} {
+if {![info exists already_logged_in]} {
+    send "root\r"
+
+    # Short, bounded interactive exchange: either a password prompt (send it)
+    # or, on an autologin console, we land straight on a shell prompt.
+    set timeout 60
     expect {
-        -re {[#$] $} {}
-        eof { puts "FATAL: guest console closed while waiting for the shell prompt after login"; exit 2 }
-        timeout { puts "FATAL: no shell prompt after sending the password"; exit 2 }
+        "Password:" { send "autosd\r" }
+        -re {[#$] $} { set already_at_prompt 1 }
+        eof { puts "FATAL: guest console closed while waiting for the password prompt"; exit 2 }
+        timeout { puts "FATAL: no password prompt (or shell prompt) after sending username"; exit 2 }
+    }
+    if {![info exists already_at_prompt]} {
+        expect {
+            -re {[#$] $} {}
+            eof { puts "FATAL: guest console closed while waiting for the shell prompt after login"; exit 2 }
+            timeout { puts "FATAL: no shell prompt after sending the password"; exit 2 }
+        }
     }
 }
 send "sh /var/lib/autosd-test/gate-guest.sh\r"
@@ -44,7 +51,24 @@ send "sh /var/lib/autosd-test/gate-guest.sh\r"
 # inactivity timer on every complete "GATE<n>_..." marker line, so a run
 # that's merely slow keeps proceeding while a run that goes truly silent (or
 # whose guest dies) still fails fast and with a clear diagnostic.
-set inactivity_timeout 300
+#
+# GATE5 is the longest silent stretch: every command between the last
+# GATE4_* marker and the eventual GATE5_* verdict is output-suppressed, so
+# nothing re-arms the timer for the whole block. That stretch is bounded
+# arithmetically, not by a TCG-speed guess: two 30-iteration poll loops
+# (curl --max-time 5 + sleep 2 each) cap at 210s apiece = 420s of pure
+# network/sleep wall-clock alone (this is a hard ceiling: curl's --max-time
+# and sleep are wall-clock, not CPU-bound, so TCG slowness doesn't shrink
+# it), plus a busybox podman load, two "podman run -d", up to 30 "podman
+# inspect" calls and two "podman rm -f" -- all process-spawn overhead that
+# does scale with TCG speed. Budgeting that at up to ~30-60s per operation
+# (image load, each run/rm) and ~2s per inspect adds roughly another 170s,
+# for a padded worst-case estimate around 590s. inactivity_timeout is set
+# well above that combined estimate; if a future change makes the GATE5
+# loops longer (more iterations, a longer --max-time, more polled
+# operations), raise this number to match -- it is coupled to those bounds,
+# not an independent knob.
+set inactivity_timeout 900
 set timeout $inactivity_timeout
 expect {
     "GATE_DONE" {}

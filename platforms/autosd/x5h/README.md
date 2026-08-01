@@ -82,12 +82,19 @@ The overall gate (`qemu-gate.exp`) exits 0 only if `GATE1_LOGIN_OK`,
 `GATE4_STORE_FS=btrfs`, `GATE_DONE`, one of the GATE2 accepted markers, and
 one of the GATE5 accepted markers are all present in the session log.
 
-`qemu-gate.exp` waits for the guest-side run with an inactivity timeout (5
+`qemu-gate.exp` waits for the guest-side run with an inactivity timeout (15
 minutes with no new `GATE<n>_…` marker line, re-armed on every marker) rather
 than one fixed budget for the whole run: the run's total length varies with
 TCG emulation speed and isn't a meaningful thing to cap as a single number,
 but a guest that goes genuinely silent, or dies outright, still fails fast
-with a clear diagnostic instead of a generic "gate did not finish".
+with a clear diagnostic instead of a generic "gate did not finish". The
+15-minute figure is not arbitrary: GATE5 is the longest stretch with no
+re-arming marker output (every command in it is output-suppressed), and its
+two 30-iteration poll loops alone cap at 210s each — 420s of pure
+network/sleep wall-clock — before accounting for podman process-spawn
+overhead on top. See the comment at `qemu-gate.exp`'s `inactivity_timeout`
+declaration for the full arithmetic; it is coupled to GATE5's poll bounds in
+`gate-guest.sh`, not an independent number.
 
 ## Board bring-up
 
