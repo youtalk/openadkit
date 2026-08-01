@@ -1,0 +1,39 @@
+#!/usr/bin/expect -f
+# Drive the x5h QEMU gate: login, run gate-guest.sh, save the session log.
+# Usage: qemu-gate.exp <run-qemu-gate.sh> <Image> <rootfs.ext4> <blank-disk> <logfile>
+set timeout 1800
+set runner [lindex $argv 0]
+set kimg   [lindex $argv 1]
+set rootfs [lindex $argv 2]
+set blank  [lindex $argv 3]
+set logf   [lindex $argv 4]
+log_file -noappend $logf
+spawn $runner $kimg $rootfs $blank
+expect {
+    -re "login:" {}
+    timeout { puts "FATAL: no login prompt"; exit 2 }
+}
+send "root\r"
+expect "Password:" { send "autosd\r" }
+expect -re {[#$] $} {}
+send "sh /var/lib/autosd-test/gate-guest.sh\r"
+expect {
+    "GATE_DONE" {}
+    timeout { puts "FATAL: gate did not finish"; exit 2 }
+}
+expect -re {[#$] $} {}
+send "poweroff\r"
+expect eof
+# Judge the markers from the captured log.
+set fh [open $logf r]; set log [read $fh]; close $fh
+set fail 0
+foreach must {GATE1_LOGIN_OK GATE3_TMPFS_OK GATE4_BTRFS_OK GATE_DONE} {
+    if {![string match "*$must*" $log]} { puts "MISSING: $must"; set fail 1 }
+}
+if {![string match "*GATE2_EXT4_FAIL_OK*" $log] && ![string match "*GATE2_EXT4_UNEXPECTED_PASS*" $log]} {
+    puts "MISSING: GATE2 verdict (got neither FAIL_OK nor UNEXPECTED_PASS)"; set fail 1
+}
+if {![string match "*GATE5_IPTABLES_OK*" $log] && ![string match "*GATE5_NONE_OK*" $log]} {
+    puts "MISSING: GATE5 (neither iptables nor none-fallback passed)"; set fail 1
+}
+exit $fail
