@@ -14,23 +14,35 @@ permissions:
 # commit SHA rather than by ref/PR-number so a push-triggered run and the
 # pull_request-triggered run it also fires collapse into one concurrency slot
 # and the redundant one is cancelled instead of both running to completion.
-# Two different commits still get two independent slots (SHA differs), so an
-# in-flight run for an older commit during iteration is not cancelled by a
-# newer, unrelated push.
+# `github.sha` alone would not do this: on a pull_request event it is the
+# ephemeral merge commit, not the head commit, so it never matches the push
+# event's `github.sha` for the same commit. `pull_request.head.sha` is the
+# actual head commit and does match. Two different commits still get two
+# independent slots, so an in-flight run for an older commit during
+# iteration is not cancelled by a newer, unrelated push.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 jobs:
   build-and-gate:
     runs-on: ubicloud-standard-16-arm
+    # Generous but bounded: the job is expected to run for hours (aib build,
+    # a from-scratch kernel compile, emulated container builds, a TCG QEMU
+    # boot) -- well below the 360-minute platform default, so a genuinely
+    # stuck step (a hung prompt, a runaway retry loop) fails within a single
+    # working session instead of silently occupying the runner.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+
+      - name: Report disk headroom (before host tool install)
+        run: df -h /
 
       - name: Install host tools
         run: |
           sudo apt-get update
           sudo apt-get install -y podman skopeo qemu-system-arm qemu-utils expect \
-            flex bison libssl-dev libelf-dev bc yamllint
+            flex bison libssl-dev libelf-dev bc
 
       - name: Put container storage on a non-overlay location (aib CI pattern)
         run: |
@@ -41,46 +53,101 @@ jobs:
 
       - name: Install automotive-image-builder runner
         run: |
-          curl -L -o auto-image-builder.sh \
+          curl -fL -o auto-image-builder.sh \
             "https://gitlab.com/CentOS/automotive/src/automotive-image-builder/-/raw/main/auto-image-builder.sh?ref_type=heads"
           chmod +x auto-image-builder.sh
           sudo bash ./auto-image-builder.sh --help | head -30
 
-      - name: Show available exports (source of truth for the flags below)
+      - name: Show aib command help (source of truth for the build invocation below)
+        # The current aib CLI is bootc-shaped: no list-exports, no --mode,
+        # no --export. Capture the live --help output for `build` and
+        # `to-disk-image` plus the distro/target lists, so a flag mismatch
+        # in the next two steps is diagnosed from this output, not guessed.
         run: |
-          sudo bash ./auto-image-builder.sh list-exports || true
+          sudo bash ./auto-image-builder.sh build --help || true
+          sudo bash ./auto-image-builder.sh to-disk-image --help || true
           sudo bash ./auto-image-builder.sh list-targets || true
+          sudo bash ./auto-image-builder.sh list-distro || true
 
       - name: Build the aib builder image
         run: |
+          cd platforms/autosd/x5h
           sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
-            bash ./auto-image-builder.sh build-builder --distro autosd10-sig
+            bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build-builder --distro autosd10-sig
 
-      - name: Build rootfs exports (ext4 for the gate, tar for the board NFS root)
+      - name: Build the x5h rootfs container image
+        # `aib build` on this CLI generation produces a bootc container
+        # image (to the podman store), not a package/ext4/tar export --
+        # those flags do not exist any more. The tar and ext4 exports this
+        # job still needs are derived from this container in the next two
+        # steps.
         run: |
           cd platforms/autosd/x5h
-          for exp in ext4 tar; do
-            sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
-              bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build \
-              --distro autosd10-sig --target qemu --mode package --export "$exp" \
-              --define-file aib/vars.yml \
-              aib/x5h-rootfs.aib.yml "aib/x5h-rootfs.$exp"
-          done
-          ls -lh aib/x5h-rootfs.*
+          sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
+            bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build \
+            --distro autosd10-sig --target qemu \
+            --define-file aib/vars.yml \
+            aib/x5h-rootfs.aib.yml localhost/x5h-rootfs:latest
 
-      - name: Inspect the tar export (non-ostree, podman present)
+      - name: Derive the rootfs tar via podman export
+        # aib built the image under sudo, so it lives in root's podman
+        # store (bind-mounted onto the non-overlay location above) -- the
+        # export must run with the same privilege and against that store.
+        run: |
+          cd platforms/autosd/x5h
+          cid=$(sudo podman create localhost/x5h-rootfs:latest /bin/true)
+          sudo podman export "$cid" -o aib/x5h-rootfs.tar
+          sudo podman rm "$cid"
+          ls -lh aib/x5h-rootfs.tar
+
+      - name: Inspect the tar export (podman present, btrfs-progs present, no ostree/composefs content)
+        # Anchored at a path component boundary: an unanchored grep for
+        # e.g. "usr/bin/podman" would also match
+        # "ostree/deploy/.../usr/bin/podman", which defeats the purpose of
+        # the ostree/composefs check below. This is now also the guard that
+        # tells us whether dropping the old --mode package flag (which no
+        # longer exists) cost us the non-ostree property of the export --
+        # if it comes out ostree-shaped, that's a real finding to fail on,
+        # not something to relax.
         run: |
           cd platforms/autosd/x5h
           tar tf aib/x5h-rootfs.tar | head -50
-          tar tf aib/x5h-rootfs.tar | grep -q 'usr/bin/podman' || { echo "FATAL: no podman"; exit 1; }
-          tar tf aib/x5h-rootfs.tar | grep -q 'usr/sbin/mkfs.btrfs\|usr/bin/mkfs.btrfs' || { echo "FATAL: no btrfs-progs"; exit 1; }
-          if tar tf aib/x5h-rootfs.tar | grep -qE '^ostree/|/composefs'; then echo "FATAL: ostree content in a package-mode export"; exit 1; fi
+          tar tf aib/x5h-rootfs.tar | grep -qE '(^|/)usr/bin/podman' || { echo "FATAL: no podman"; exit 1; }
+          tar tf aib/x5h-rootfs.tar | grep -qE '(^|/)usr/s?bin/mkfs\.btrfs' || { echo "FATAL: no btrfs-progs"; exit 1; }
+          if tar tf aib/x5h-rootfs.tar | grep -qE '(^|/)ostree/|/composefs'; then
+            echo "FATAL: ostree content in the podman-exported rootfs"
+            exit 1
+          fi
+
+      - name: Derive the ext4 export from the tar
+        # Loop-mount + extract -- the same tar-to-ext4 reassembly Task 7's
+        # local replay documents, so the two now agree instead of diverging.
+        run: |
+          cd platforms/autosd/x5h
+          truncate -s 6G aib/x5h-rootfs.ext4
+          sudo mkfs.ext4 -q aib/x5h-rootfs.ext4
+          mnt="$(mktemp -d)"
+          sudo mount -o loop aib/x5h-rootfs.ext4 "$mnt"
+          sudo tar xf aib/x5h-rootfs.tar -C "$mnt"
+          sudo umount "$mnt"
+          rmdir "$mnt"
 
       - name: Build the mimic kernel (native aarch64)
+        # Consumes nothing the aib steps produce (Task 3's own source
+        # tree/config), so this runs even if aib failed above: it's the
+        # first time this kernel has ever compiled, and losing that signal
+        # to an unrelated aib failure is expensive on hours-per-iteration
+        # arm64 CI ahead of a one-shot board session.
+        if: ${{ !cancelled() }}
         run: |
           platforms/autosd/x5h/kernel/build-mimic-kernel.sh "$RUNNER_TEMP/mimic"
 
       - name: Build test images
+        # Also aib-independent, and the first real execution of `docker
+        # build` on a runner with working networking (this sandbox has
+        # net.ipv4.ip_forward=0, so it was previously only proven via a
+        # non-committed --network host copy) -- same reasoning as above.
+        if: ${{ !cancelled() }}
         run: |
           sudo systemctl start docker 2>/dev/null || true
           platforms/autosd/x5h/scripts/make-test-images.sh "$RUNNER_TEMP/testimages"
@@ -90,24 +157,47 @@ jobs:
           cd platforms/autosd/x5h
           scripts/inject-test-images.sh aib/x5h-rootfs.ext4 "$RUNNER_TEMP/testimages"
 
+      - name: Report disk headroom (before the QEMU gate)
+        run: df -h /
+
       - name: Run the QEMU gate (same-arch TCG, no /dev/kvm on this runner)
         run: |
           cd platforms/autosd/x5h
           [ -w /dev/kvm ] && echo "accel: KVM" || echo "accel: TCG (no /dev/kvm)"
           sudo ./scripts/qemu-gate.exp ./scripts/run-qemu-gate.sh \
             "$RUNNER_TEMP/mimic/Image" aib/x5h-rootfs.ext4 "$RUNNER_TEMP/blank.img" /tmp/x5h-gate.log
+
+      - name: Show gate markers
+        # Its own step under always(): under bash -e a nonzero qemu-gate.exp
+        # aborts the step it's in, so folded into the gate step above this
+        # summary would never print precisely when the gate fails.
+        if: always()
+        run: |
           echo "--- gate markers ---"
           grep -E 'GATE[0-9_]+' /tmp/x5h-gate.log || true
+
+      - name: Stage debugging artifacts into one flat directory before upload
+        # The four source paths span three unrelated absolute-path roots
+        # ($GITHUB_WORKSPACE, $RUNNER_TEMP, /tmp), so uploading them
+        # directly would make upload-artifact@v4 compute a least-common-
+        # ancestor of "/" and preserve each file's full absolute path
+        # inside the archive. That still works (Task 7's `find`-based
+        # lookups are depth-agnostic) but is needlessly deep. Stage into
+        # one directory first so the archive is flat instead.
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/x5h-bundle"
+          cp -f platforms/autosd/x5h/aib/x5h-rootfs.tar "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/mimic/Image" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -rf "$RUNNER_TEMP/testimages" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f /tmp/x5h-gate.log "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          ls -lhR "$RUNNER_TEMP/x5h-bundle" || true
 
       - name: Upload artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: x5h-gate-bundle
-          path: |
-            platforms/autosd/x5h/aib/x5h-rootfs.tar
-            ${{ runner.temp }}/mimic/Image
-            ${{ runner.temp }}/testimages/
-            /tmp/x5h-gate.log
+          path: ${{ runner.temp }}/x5h-bundle
           retention-days: 14
           if-no-files-found: warn
