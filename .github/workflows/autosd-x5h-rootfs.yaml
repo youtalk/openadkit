@@ -1,0 +1,113 @@
+name: autosd-x5h-rootfs
+on:
+  push:
+    branches: [feat/autosd-x5h-rootfs]
+  pull_request:
+    paths:
+      - platforms/autosd/x5h/**
+      - .github/workflows/autosd-x5h-rootfs.yaml
+permissions:
+  contents: read
+# Push (branch) and pull_request (paths filter) both fire for the same commit
+# once the fork PR exists, and this job is multi-hour arm64 CI (aib build +
+# kernel compile + emulated container builds + a TCG QEMU boot). Group by the
+# commit SHA rather than by ref/PR-number so a push-triggered run and the
+# pull_request-triggered run it also fires collapse into one concurrency slot
+# and the redundant one is cancelled instead of both running to completion.
+# Two different commits still get two independent slots (SHA differs), so an
+# in-flight run for an older commit during iteration is not cancelled by a
+# newer, unrelated push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+jobs:
+  build-and-gate:
+    runs-on: ubicloud-standard-16-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman skopeo qemu-system-arm qemu-utils expect \
+            flex bison libssl-dev libelf-dev bc yamllint
+
+      - name: Put container storage on a non-overlay location (aib CI pattern)
+        run: |
+          sudo rm -rf /var/lib/containers /run/containers
+          sudo mkdir -p "$RUNNER_TEMP/_containers/var" "$RUNNER_TEMP/_containers/run" /var/lib/containers /run/containers
+          sudo mount --bind "$RUNNER_TEMP/_containers/var" /var/lib/containers
+          sudo mount --bind "$RUNNER_TEMP/_containers/run" /run/containers
+
+      - name: Install automotive-image-builder runner
+        run: |
+          curl -L -o auto-image-builder.sh \
+            "https://gitlab.com/CentOS/automotive/src/automotive-image-builder/-/raw/main/auto-image-builder.sh?ref_type=heads"
+          chmod +x auto-image-builder.sh
+          sudo bash ./auto-image-builder.sh --help | head -30
+
+      - name: Show available exports (source of truth for the flags below)
+        run: |
+          sudo bash ./auto-image-builder.sh list-exports || true
+          sudo bash ./auto-image-builder.sh list-targets || true
+
+      - name: Build the aib builder image
+        run: |
+          sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
+            bash ./auto-image-builder.sh build-builder --distro autosd10-sig
+
+      - name: Build rootfs exports (ext4 for the gate, tar for the board NFS root)
+        run: |
+          cd platforms/autosd/x5h
+          for exp in ext4 tar; do
+            sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
+              bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build \
+              --distro autosd10-sig --target qemu --mode package --export "$exp" \
+              --define-file aib/vars.yml \
+              aib/x5h-rootfs.aib.yml "aib/x5h-rootfs.$exp"
+          done
+          ls -lh aib/x5h-rootfs.*
+
+      - name: Inspect the tar export (non-ostree, podman present)
+        run: |
+          cd platforms/autosd/x5h
+          tar tf aib/x5h-rootfs.tar | head -50
+          tar tf aib/x5h-rootfs.tar | grep -q 'usr/bin/podman' || { echo "FATAL: no podman"; exit 1; }
+          tar tf aib/x5h-rootfs.tar | grep -q 'usr/sbin/mkfs.btrfs\|usr/bin/mkfs.btrfs' || { echo "FATAL: no btrfs-progs"; exit 1; }
+          if tar tf aib/x5h-rootfs.tar | grep -qE '^ostree/|/composefs'; then echo "FATAL: ostree content in a package-mode export"; exit 1; fi
+
+      - name: Build the mimic kernel (native aarch64)
+        run: |
+          platforms/autosd/x5h/kernel/build-mimic-kernel.sh "$RUNNER_TEMP/mimic"
+
+      - name: Build test images
+        run: |
+          sudo systemctl start docker 2>/dev/null || true
+          platforms/autosd/x5h/scripts/make-test-images.sh "$RUNNER_TEMP/testimages"
+
+      - name: Inject test payload into the ext4 export
+        run: |
+          cd platforms/autosd/x5h
+          scripts/inject-test-images.sh aib/x5h-rootfs.ext4 "$RUNNER_TEMP/testimages"
+
+      - name: Run the QEMU gate (same-arch TCG, no /dev/kvm on this runner)
+        run: |
+          cd platforms/autosd/x5h
+          [ -w /dev/kvm ] && echo "accel: KVM" || echo "accel: TCG (no /dev/kvm)"
+          sudo ./scripts/qemu-gate.exp ./scripts/run-qemu-gate.sh \
+            "$RUNNER_TEMP/mimic/Image" aib/x5h-rootfs.ext4 "$RUNNER_TEMP/blank.img" /tmp/x5h-gate.log
+          echo "--- gate markers ---"
+          grep -E 'GATE[0-9_]+' /tmp/x5h-gate.log || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x5h-gate-bundle
+          path: |
+            platforms/autosd/x5h/aib/x5h-rootfs.tar
+            ${{ runner.temp }}/mimic/Image
+            ${{ runner.temp }}/testimages/
+            /tmp/x5h-gate.log
+          retention-days: 14
+          if-no-files-found: warn
