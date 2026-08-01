@@ -118,17 +118,32 @@ scripts/stage-nfs-rootfs.sh <x5h-rootfs.tar> <bsp-rootfs-dir> <dest-dir> <testim
 
 `<bsp-rootfs-dir>` is the existing BSP NFS root — it is only ever read from (to copy
 `/lib/modules/6.1.102-yocto-standard`, since overlayfs/veth/bridge/x_tables are all `=m` on
-the BSP kernel), never modified. The script refuses to run if `<dest-dir>` already exists,
-and prints `OK: staged at <dest-dir>` on success. Add the new export to `/etc/exports`
-(mirror the existing BSP export line's options) and run `exportfs -ra`.
+the BSP kernel), never modified. `<testimages-dir>` is the directory holding
+`busybox-oci.tar` and `captest-docker.tar` — with the flat CI bundle, that is the same
+bundle directory `find` located above.
+
+The script refuses to run if `<dest-dir>` already exists, and prints `OK: staged at
+<dest-dir>` plus a `<dest-dir>/.x5h-stage-complete` stamp file on success. If a previous run
+was interrupted, `<dest-dir>` can exist without that stamp — treat that as incomplete, not
+resumable: `rm -rf <dest-dir>` and rerun the script from scratch. Once staged, add the new
+export to `/etc/exports` (mirror the existing BSP export line's options) and run
+`exportfs -ra`.
 
 ### 2. U-Boot: `printenv` backup, then `bootcmd_autosd`
 
 Before touching the U-Boot environment, capture a full `printenv` to the session log — this
 is what makes the next step reversible. The default `bootcmd` is **never** modified; only a
-new `bootcmd_autosd` variable is added, from the `uboot/autosd-boot.env` template. Fill its
-`${...}` placeholders with the site values in `x5h-work/HANDOFF.md` (not committed to this
-repo) and enter each line at the U-Boot prompt, then boot the AutoSD NFS root with:
+new `bootcmd_autosd` variable is added, from the `uboot/autosd-boot.env` template.
+
+The template's `${...}` placeholders are of two kinds: `serverip`, `kernel_addr_r`, and
+`fdt_addr_r` are already defined by this board's U-Boot environment (built-ins); the rest
+(`autosd_export_path`, `bootargs_bsp`, `board_ip_config`, `dtb_file`) are operator-supplied
+from `x5h-work/HANDOFF.md` (not committed to this repo) and must be `setenv` at the prompt
+*before* entering the template's `bootargs_autosd` line — that line is double-quoted, so
+U-Boot expands it immediately at `setenv` time, and any placeholder that isn't set yet
+silently expands to empty rather than erroring. After entering all three lines, read back
+`printenv bootargs_autosd` and confirm it looks complete, then boot the AutoSD NFS root
+with:
 
 ```
 run bootcmd_autosd
@@ -140,18 +155,35 @@ default `bootcmd`, BSP NFS root) before releasing the board.
 ### 3. On-board podman smoke: tmpfs before btrfs
 
 `scripts/board-podman-smoke.sh` is staged onto the NFS root under `/var/lib/autosd-test/`
-by step 1. It runs in two phases, and the order is a safety invariant, not a suggestion:
+by step 1. It runs in two phases, and the order is an enforced invariant, not just a
+documented one: `btrfs` refuses to run unless a `tmpfs` run has already passed on this boot.
 
 ```bash
 board-podman-smoke.sh tmpfs                                        # zero board mutation
 board-podman-smoke.sh btrfs /dev/disk/by-partlabel/autosd-store     # writes the LUN
 ```
 
-`tmpfs` must print `SMOKE_tmpfs_PASS` before `btrfs` is attempted. `btrfs` is the only step
-in this task that writes to physical storage — the previously-empty 32 GB UFS LUN. Creating
-the GPT label on that LUN is a deliberate manual, eyes-on step done at the board prompt
-itself, not by this script: the point where the operator confirms by hand that `$DEV` names
-the right disk before anything is written to it.
+A genuine `tmpfs` pass stamps `/run/x5h-smoke-tmpfs-passed` (cleared by a power cycle, since
+`/run` is tmpfs); `btrfs` checks for that stamp before touching anything and prints
+`SMOKE_btrfs_TMPFS_GATE_FAIL` and exits if it is missing. If you deliberately need to run
+`btrfs` alone — e.g. after a reboot cleared the stamp but you already know `tmpfs` is fine —
+either re-run `tmpfs` again (it costs nothing) or `touch /run/x5h-smoke-tmpfs-passed` by
+hand to override.
+
+Each phase prints `SMOKE_<mode>_STORE_FS=<fstype>` right after its mount succeeds (mirroring
+`gate-guest.sh`'s `GATE3_STORE_FS`/`GATE4_STORE_FS`) — check it reads `tmpfs` / `btrfs`
+respectively, not whatever was mounted underneath, before trusting a later `_PASS`. Every run
+terminates in exactly one of `SMOKE_<mode>_PASS` or `SMOKE_<mode>_FAIL`; grep for that pair
+rather than assuming silence, or a printed `_FAIL` marker earlier in the log, means the run
+already stopped.
+
+`btrfs` is the only step in this task that writes to physical storage — the previously-empty
+32 GB UFS LUN. Partitioning that LUN (creating the GPT label) and formatting it
+(`mkfs.btrfs -f <partition>`) are both deliberate manual, eyes-on steps done at the board
+prompt itself, not by this script: the point where the operator confirms by hand that the
+device names the right disk before anything is written to it. `sgdisk` (partitioning) and
+`mkfs.btrfs` come from an EPEL 10 repo the image manifest adds — the AutoSD 10 repos alone
+do not carry `btrfs-progs`/`gdisk`.
 
 Site values — server IP, export paths, the `ip=` kernel argument, and the DTB filename —
 live in `x5h-work/HANDOFF.md` on the operator's machine and are never committed to this
