@@ -99,17 +99,29 @@ expect {
     timeout { puts "FATAL: gate produced no new marker output for ${inactivity_timeout}s (stalled)"; exit 2 }
 }
 
+# By this point GATE_DONE has already matched above: every marker is in the
+# log and the run's verdict is already decided, win or lose. This block only
+# tries to power the guest off cleanly -- a courtesy, not a judgment step --
+# so a miss here must WARN and fall through to judging, the same treatment
+# the poweroff block below it already gets, not FATAL/exit 2. Exiting 2 here
+# would throw away an already-green run over a shell-prompt regex miss (the
+# same end-of-buffer fragility this whole file works around elsewhere) or a
+# guest that died after finishing its job, burning a multi-hour arm64 CI
+# cycle for a reason that has nothing to do with whether the gate passed.
 set timeout 60
+set guest_alive 1
 expect {
     -re {[#$] $} {}
-    eof { puts "FATAL: guest console closed while waiting for the shell prompt after the gate run"; exit 2 }
-    timeout { puts "FATAL: no shell prompt after the gate run finished"; exit 2 }
+    eof { puts "WARN: guest console closed while waiting for the shell prompt after the gate run; continuing to judge captured markers"; set guest_alive 0 }
+    timeout { puts "WARN: no shell prompt after the gate run finished; continuing to judge captured markers" }
 }
-send "poweroff\r"
-set timeout 60
-expect {
-    eof {}
-    timeout { puts "WARN: guest did not power off within ${timeout}s; continuing to judge captured markers" }
+if {$guest_alive} {
+    send "poweroff\r"
+    set timeout 60
+    expect {
+        eof {}
+        timeout { puts "WARN: guest did not power off within ${timeout}s; continuing to judge captured markers" }
+    }
 }
 
 # Judge the markers from the captured log.
