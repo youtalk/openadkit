@@ -104,6 +104,35 @@ overhead on top. See the comment at `qemu-gate.exp`'s `inactivity_timeout`
 declaration for the full arithmetic; it is coupled to GATE5's poll bounds in
 `gate-guest.sh`, not an independent number.
 
+## Gate verdict: survey §7 answers
+
+The table below is the observed output of the first fully green QEMU gate run
+([`30730519760`](https://github.com/youtalk/openadkit/actions/runs/30730519760),
+branch `feat/autosd-x5h-rootfs`), not a restatement of what was expected.
+Every row traces to a marker or a console line from that run; where a claim
+is inference rather than direct observation, it says so.
+
+The `*_STORE_FS` markers are what make findings 2-4 trustworthy, not
+incidental — they prove each verdict was actually measured on the filesystem
+its name claims, not on whatever `/var/lib/containers` happened to still be
+mounted if an earlier `mount`/`mkfs` had silently failed. Without them this
+table would be a set of assertions; with them it is a set of measurements.
+
+| §7 question | Marker(s) observed | Observed result | Survey §7 answer |
+| --- | --- | --- | --- |
+| 1. Does AutoSD 10 userspace boot on a kernel with `selinux=0`? | `GATE1_LOGIN_OK`, `GATE1_SYSTEMD_STATE=degraded` | Login succeeded. `systemctl is-system-running` reported `degraded`, from exactly two failed units (`selinux-bools.service`, `ukiboot-set-success.service` — see Troubleshooting for both). | **Yes.** AutoSD 10 userspace boots and is usable on a kernel with no SELinux. `degraded` is expected and benign here, not a fault — both failing units are already named and explained in Troubleshooting so the board operator is not alarmed by seeing it. |
+| 2. Does podman's default container store carry the `security.capability` xattr on ext4 without `EXT4_FS_SECURITY`? | `GATE2_STORE_FS=ext4`, `GATE2_EXT4_FAIL_OK` | Measured on ext4 (`GATE2_STORE_FS` confirms it — no mount is performed for GATE2, so this is the root export's own filesystem). `podman load` succeeded, but a follow-up `getcap` inside a running container did not find the capability. | **No** — the default container store on ext4 without `EXT4_FS_SECURITY` cannot carry `security.capability`, so it is unusable as shipped; the board needs an alternative store (findings 3-4). **This verdict was wrong once already, and the reason is worth more than the verdict itself:** the previous CI cycle reported `GATE2_EXT4_UNEXPECTED_PASS` — a false positive, because `podman load` alone exits 0 even when the xattr is silently dropped. Only after GATE2 was given the same `run` + `getcap` confirmation GATE3/GATE4 already had did this, the real answer, emerge. A load-only check is not sufficient evidence for this question on this filesystem; treat any future variant of this probe that skips the `getcap` step with the same suspicion. |
+| 3. Does a tmpfs-backed container store work? | `GATE3_STORE_FS=tmpfs`, `GATE3_TMPFS_OK` | Measured on tmpfs (`GATE3_STORE_FS` confirms it, guarding against a silently-failed mount leaving the probe on the ext4 root underneath). `podman load` + `getcap` in a running container both succeeded — the capability round-trips. | **Yes.** tmpfs carries the capability xattr correctly. It is volatile — RAM-backed, gone on reboot — so it is useful as a scratch/ephemeral store, not as the board's primary persistent one. |
+| 4. Does a btrfs-backed container store on a second disk work? | `GATE4_STORE_FS=btrfs`, `GATE4_BTRFS_OK` | Measured on btrfs (`GATE4_STORE_FS` confirms it — the blank second QEMU disk, `mkfs.btrfs -f` then mounted). `podman load` + `getcap` both succeeded. | **Yes**, and it is the *only* viable **persistent** option on this board: the BSP kernel has `# CONFIG_XFS_FS is not set` and `# CONFIG_F2FS_FS is not set`, and ext4 is ruled out by finding 2 above. This is exactly what makes the EPEL 10 `btrfs-progs`/`gdisk` dependency (first Troubleshooting row) non-negotiable, not a convenience choice. |
+| 5. Does container networking (netavark) work without `NF_TABLES`? | `GATE5_NONE_OK` | Container networking worked with `firewall_driver = "none"`: a direct-container-IP HTTP request succeeded, which is that marker's own pass condition. (The `podman0` bridge coming up and `veth0` entering forwarding were directly observed in console output from the prior cycle, under this same, unchanged `gate-guest.sh` GATE5 logic — noted here as corroborating detail, not re-observed verbatim in this specific run's log excerpt.) | **Yes, with `firewall_driver = "none"`** — not with `"iptables"`, which is not something a future reader should retry: netavark 2.0.0 (what this image resolves) removed that backend outright, a hard config-validation rejection independent of any kernel capability (see the netavark Troubleshooting row for the version check). **Not yet confirmed, and flagged rather than assumed:** this proves networking works with `firewall_driver = "none"` on the *mimic* kernel only. The board runs the real BSP kernel with `x_tables` modules loaded from the copied module tree — a different kernel, a different module set, the same shipped config. Whether container networking also works there is what the board session still has to confirm; it is not established by this gate. |
+
+The gate itself consumed roughly 430 s of guest-visible wall clock, under
+same-arch TCG with no `/dev/kvm` on the CI runner — comfortably inside
+`qemu-gate.exp`'s 900 s inactivity budget (see above). That budget was tuned
+from desk arithmetic before any gate had ever run end to end; this is the
+first real timing signal for it, and it confirms the budget is sound —
+retiring that open risk.
+
 ## Board bring-up
 
 Board time is scarce and one-shot — no rerun scheduled. The order below encodes the plan's
