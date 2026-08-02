@@ -80,19 +80,28 @@ jobs:
           sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
             bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build-builder --distro autosd10-sig
 
-      - name: Dump resolved aib variables (confirms extra_repos took effect)
-        # Diagnostic only, not gate-blocking: --dump-variables prints the
-        # fully-resolved variable set for this exact manifest/define-file
-        # combination and exits before building, so a wrong or dropped
-        # extra_repos entry (e.g. the $arch-in---define-file pitfall noted
-        # in vars.yml) shows up here directly instead of being inferred
-        # from whether the depsolve below happens to succeed or fail.
+      - name: Validate resolved aib variables (dry-run; confirms extra_repos took effect)
+        # --dump-variables alone does not stop the build, despite the CLI
+        # help text ("...and exit"): aib/osbuild.py only sets
+        # defines["print_variables"] = True, which an mpp-eval in
+        # computed-vars.ipp.yml prints with no sys.exit on that path.
+        # --dry-run is the flag that actually stops before osbuild runs
+        # (aib/main.py only appends an export "if not args.dry_run") --
+        # every upstream test pairs the two, so this step does too. With
+        # --dry-run, full manifest generation still runs, including
+        # mpp-depsolve, so this is a fast, fail-first validation of the
+        # EPEL change: if depsolve is broken this step fails here, before
+        # the real build below spends time on it. No output filtering:
+        # the full dump (including extra_repos) goes straight to the step
+        # log, and the step's own exit status is the real one -- nothing
+        # here should swallow either.
         run: |
           cd platforms/autosd/x5h
-          sudo bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build --dump-variables --tar \
+          sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
+            bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build --dump-variables --dry-run --tar \
             --distro autosd10-sig --target qemu \
             --define-file aib/vars.yml \
-            aib/x5h-rootfs.aib.yml aib/x5h-rootfs.tar 2>&1 | grep -A8 '"extra_repos"' || true
+            aib/x5h-rootfs.aib.yml aib/x5h-rootfs.tar
 
       - name: Build the x5h rootfs tar (aib build --tar)
         # --tar builds a tar file with the container content directly,
