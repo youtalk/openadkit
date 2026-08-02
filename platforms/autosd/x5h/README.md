@@ -161,6 +161,12 @@ then boot the AutoSD NFS root with:
 run bootcmd_autosd
 ```
 
+Once logged in, `systemctl is-system-running` reporting `degraded` is expected, not a fault
+— the QEMU gate reproduces the identical state from exactly two known-benign failed units
+(`selinux-bools.service`: no SELinux in this kernel; `ukiboot-set-success.service`: no
+ukibootctl partition, since this image ships `use_efipart: false` — see the Troubleshooting
+table below for both). Neither should be chased as a live problem.
+
 At the end of the session, re-verify the unmodified BSP boot path still works (power cycle,
 default `bootcmd`, BSP NFS root) before releasing the board.
 

@@ -54,8 +54,20 @@ esac
 # SMOKE_<mode>_FAIL -- and the tmpfs cleanup below always runs.
 FAIL=
 podman load -i "$T/captest-docker.tar" || { echo "SMOKE_${MODE}_LOAD_FAIL"; FAIL=1; }
+# The loaded tag CANNOT be hardcoded as localhost/x5h-captest:latest: podman's
+# `load` image-tag normalization differs across podman builds/versions -- the
+# QEMU gate's guest podman produces docker.io/library/x5h-captest:latest
+# instead, and a hardcoded run against a nonexistent local tag falls through
+# to trying to pull from a registry literally named "localhost". Discover it
+# the same way $BB is discovered below, and guard the empty capture the same
+# way, so a discovery failure can't reach `podman run --rm "" getcap ...`.
+CAPTEST=
 if [ -z "$FAIL" ]; then
-    podman run --rm localhost/x5h-captest:latest getcap /usr/bin/ping | grep cap_net_raw \
+    CAPTEST="$(podman images --format '{{.Repository}}:{{.Tag}}' | grep -m1 captest)"
+    [ -n "$CAPTEST" ] || { echo "SMOKE_${MODE}_LOAD_FAIL"; FAIL=1; }
+fi
+if [ -z "$FAIL" ]; then
+    podman run --rm "$CAPTEST" getcap /usr/bin/ping | grep cap_net_raw \
         || { echo "SMOKE_${MODE}_CAPS_FAIL"; FAIL=1; }
 fi
 if [ -z "$FAIL" ]; then
@@ -73,7 +85,7 @@ if [ -z "$FAIL" ]; then
     if curl -fsS --max-time 10 http://127.0.0.1:8080/ | grep -q ok; then
         echo "SMOKE_${MODE}_NET_OK"
     else
-        echo "SMOKE_${MODE}_NET_FAIL (try firewall none / direct container IP, as in the QEMU gate)"
+        echo "SMOKE_${MODE}_NET_FAIL (50-x5h.conf already ships firewall_driver=none, the only value this netavark accepts and the gate proved working -- look at podman0/veth state or podman logs, not the firewall driver)"
         FAIL=1
     fi
     podman rm -f web >/dev/null 2>&1
