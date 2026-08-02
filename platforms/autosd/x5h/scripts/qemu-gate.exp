@@ -15,8 +15,30 @@ spawn $runner $kimg $rootfs $blank
 # autologin console never prints "login:" at all, so a bare shell prompt is
 # accepted here too (Task 2 does set a root password, so this is a belt and
 # braces case, not the expected path).
+#
+# Boot loop guard: a stock fstab ESP entry with no matching partition on
+# this bare ext4 export makes AutoSD's emergency.service ("Emergency Shell
+# Override - Reboot") reboot instead of dropping to a shell, so an
+# unhealthy image reboots forever instead of just hanging once. "Booting
+# Linux on physical CPU" is the kernel's very first boot line, printed
+# exactly once per boot, so counting it catches a loop directly instead of
+# burning the full 1800s to notice nothing else ever arrived. A single
+# healthy boot only ever sees this once before "login:" (or a shell
+# prompt) matches and the block returns, so any repeat here is
+# unambiguous; failing on the third occurrence (two confirmed reboots)
+# leaves a little room for a one-off restart without giving up much of the
+# fail-fast benefit -- a real loop repeats every ~30-45s here, not once.
+set boot_count 0
 set timeout 1800
 expect {
+    -re {Booting Linux on physical CPU} {
+        incr boot_count
+        if {$boot_count >= 3} {
+            puts "FATAL: guest rebooted $boot_count times without reaching a login prompt"
+            exit 2
+        }
+        exp_continue
+    }
     -re "login:" {}
     -re {[#$] $} { set already_logged_in 1 }
     eof { puts "FATAL: qemu exited before a login prompt appeared (check runner logs / kernel path)"; exit 2 }

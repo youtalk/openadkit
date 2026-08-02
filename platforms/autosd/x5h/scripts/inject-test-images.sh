@@ -34,3 +34,18 @@ sudo mkdir -p "$MNT/var/lib/autosd-test"
 sudo cp "$IMAGES/busybox-oci.tar" "$IMAGES/captest-docker.tar" "$HERE/gate-guest.sh" \
         "$MNT/var/lib/autosd-test/"
 sudo chmod +x "$MNT/var/lib/autosd-test/gate-guest.sh"
+
+# fstab was written for a disk image and carries a LABEL=ESP entry for
+# /boot/efi; the ext4 export is a bare filesystem with no ESP partition, so
+# that device unit times out at boot and cascades into AutoSD's
+# emergency.service ("Emergency Shell Override - Reboot") rebooting the
+# guest instead of dropping to a shell. Same treatment as
+# stage-nfs-rootfs.sh's board path (every fstab entry is equally wrong on
+# NFS root too): preserve the original as fstab.image, ship an empty
+# fstab. Safe here because the root filesystem comes from root=/dev/vda rw
+# on the kernel command line, not from fstab, and systemd mounts its own
+# API filesystems regardless. A missing fstab is a harmless no-op below.
+if sudo test -f "$MNT/etc/fstab"; then
+    sudo mv "$MNT/etc/fstab" "$MNT/etc/fstab.image"
+    sudo truncate -s 0 "$MNT/etc/fstab"
+fi
