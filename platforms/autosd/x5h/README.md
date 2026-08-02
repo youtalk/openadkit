@@ -133,6 +133,91 @@ from desk arithmetic before any gate had ever run end to end; this is the
 first real timing signal for it, and it confirms the budget is sound —
 retiring that open risk.
 
+## Running locally
+
+The same gate CI ran can be replayed on an x86 dev host, from the CI
+artifacts, without rebuilding anything. Two reasons this is worth doing
+beyond interactive debugging: it is the only place the tar → ext4
+reassembly gets exercised outside CI, and that reassembly is exactly what
+`scripts/stage-nfs-rootfs.sh` does for the board's NFS root (`tar xf
+<tarball> -C <dest-dir>`) — so a green local replay is corroborating
+evidence for the board staging path, not just a debugging convenience. It
+also leaves a local copy of `x5h-rootfs.tar` on disk, which is what
+`stage-nfs-rootfs.sh` consumes at board time.
+
+Everything through downloading and unpacking the artifact runs as your own
+user. Loop-mounting the ext4 export and running `qemu-gate.exp` need root —
+those two commands below are prefixed `sudo` and are the only ones that are.
+
+```bash
+cd platforms/autosd/x5h
+
+# 1. Download the bundle from the most recent green run on this branch (at
+#    the time this was written, that resolves to 30730519760, the same run
+#    cited in "Gate verdict" above).
+gh run download --repo youtalk/openadkit -n x5h-gate-bundle -D /tmp/x5h-bundle \
+  "$(gh run list --repo youtalk/openadkit --workflow autosd-x5h-rootfs.yaml \
+       --branch feat/autosd-x5h-rootfs --status success --limit 1 \
+       --json databaseId --jq '.[0].databaseId')"
+
+# 2. See what's actually there. The workflow stages a flat bundle before
+#    upload (one `testimages/` subdirectory, everything else at the top
+#    level) — `find` rather than a fixed path or a `**` glob, both because
+#    that's more robust and because it matches how the two lookups below
+#    already have to work:
+#      Image  x5h-rootfs.tar  x5h-gate.log  testimages/busybox-oci.tar  testimages/captest-docker.tar
+#    There is no ext4 export in the bundle — it's reproducible and large,
+#    so rebuild it from the tar below, the same way the CI workflow's own
+#    "Derive the ext4 export from the tar" step does.
+find /tmp/x5h-bundle -type f
+
+# 3. Rebuild the ext4 export from the tar. truncate/mkfs need no privilege
+#    (they operate on a plain file); the loop mount does.
+truncate -s 6G /tmp/x5h-replay.ext4
+mkfs.ext4 -q /tmp/x5h-replay.ext4
+mnt="$(mktemp -d)"
+sudo mount -o loop /tmp/x5h-replay.ext4 "$mnt"
+# --xattrs: mirrors the CI step exactly. A plain `tar xf` silently drops
+# extended attributes on extract (exit 0, no warning), which would make
+# GATE2 fail for the wrong reason (the archive never carried
+# security.capability into the export) instead of the real one
+# (EXT4_FS_SECURITY missing in the mimic kernel).
+sudo tar --xattrs --xattrs-include='*.*' \
+  -xf "$(find /tmp/x5h-bundle -name x5h-rootfs.tar)" -C "$mnt"
+sudo umount "$mnt"
+rmdir "$mnt"
+
+# 4. Inject the test payload. Use the script, not a hand-copy: besides the
+#    two test tars and gate-guest.sh, it also neutralizes /etc/fstab
+#    (preserving the original as fstab.image) — skip that and the guest
+#    reboot-loops on the stock fstab's ESP entry (see Troubleshooting).
+./scripts/inject-test-images.sh /tmp/x5h-replay.ext4 \
+  "$(dirname "$(find /tmp/x5h-bundle -name busybox-oci.tar)")"
+
+# 5. Run the gate. On this x86 host, run-qemu-gate.sh's aarch64+/dev/kvm
+#    check is always false, so this is cross-arch TCG — materially slower
+#    than CI's same-arch TCG (~430 s of guest time in run 30730519760, per
+#    "Gate verdict" above). There is no verified local number for cross-arch
+#    TCG; expect it to run considerably longer and budget accordingly rather
+#    than trusting a specific figure. qemu-gate.exp's inactivity timeout
+#    re-arms on every marker, so a slow-but-progressing run will not be
+#    killed early.
+sudo ./scripts/qemu-gate.exp ./scripts/run-qemu-gate.sh \
+  "$(find /tmp/x5h-bundle -name Image)" /tmp/x5h-replay.ext4 \
+  /tmp/x5h-blank.img /tmp/x5h-local-gate.log
+
+# 6. Read the result the same way CI's "Show gate markers" step does.
+grep -E 'GATE[0-9_]+' /tmp/x5h-local-gate.log
+```
+
+`qemu-gate.exp` itself exits 0 only once every required marker from the
+vocabulary table above is present in the log (`GATE1_LOGIN_OK`, both
+`GATE3`/`GATE4` `_STORE_FS=`/`_OK` pairs, `GATE_DONE`, one of the two
+accepted GATE2 verdicts, one of the two accepted GATE5 verdicts) — check
+`echo $?` after it returns, or just compare the `grep` output above against
+the marker table and the "Gate verdict" table for the expected line-for-line
+match.
+
 ## Board bring-up
 
 Board time is scarce and one-shot — no rerun scheduled. The order below encodes the plan's
