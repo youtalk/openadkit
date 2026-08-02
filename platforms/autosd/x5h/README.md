@@ -145,6 +145,11 @@ evidence for the board staging path, not just a debugging convenience. It
 also leaves a local copy of `x5h-rootfs.tar` on disk, which is what
 `stage-nfs-rootfs.sh` consumes at board time.
 
+Host tools: `gh` (authenticated), `qemu-system-aarch64` (Debian/Ubuntu:
+package `qemu-system-arm`), `expect`, and `e2fsprogs` for `mkfs.ext4` — the
+same set CI's "Install host tools" step installs, minus the pieces only
+needed to build the image and test containers from scratch.
+
 Everything through downloading and unpacking the artifact runs as your own
 user. Loop-mounting the ext4 export and running `qemu-gate.exp` need root —
 those two commands below are prefixed `sudo` and are the only ones that are.
