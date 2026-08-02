@@ -302,13 +302,30 @@ default `bootcmd`, BSP NFS root) before releasing the board.
 ### 3. On-board podman smoke: tmpfs before btrfs
 
 `scripts/board-podman-smoke.sh` is staged onto the NFS root under `/var/lib/autosd-test/`
-by step 1. It runs in two phases, and the order is an enforced invariant, not just a
-documented one: `btrfs` refuses to run unless a `tmpfs` run has already passed on this boot.
+by step 1 — **not** on `PATH`, so invoke it by absolute path (a `command not found` at a
+1.8 Mbps serial prompt costs real time). It runs in two phases, and the order is an enforced
+invariant, not just a documented one: `btrfs` refuses to run unless a `tmpfs` run has already
+passed on this boot.
 
 ```bash
-board-podman-smoke.sh tmpfs                                        # zero board mutation
-board-podman-smoke.sh btrfs /dev/disk/by-partlabel/autosd-store     # writes the LUN
+/var/lib/autosd-test/board-podman-smoke.sh tmpfs      # zero board mutation, run this first
+
+# Only after that passes: partition and format the previously-empty 32 GB UFS LUN by hand.
+# <device> is the one eyes-on decision here — confirm it against `lsblk` output (size,
+# absence of children/partitions) before running anything below. sgdisk and mkfs.btrfs
+# themselves are not eyes-on steps, just the plumbing that follows that decision.
+lsblk
+sgdisk -n 1:0:0 -t 1:8300 -c 1:autosd-store <device>          # e.g. /dev/sdc — partition 1
+mkfs.btrfs -f /dev/disk/by-partlabel/autosd-store             # the label now resolves
+
+/var/lib/autosd-test/board-podman-smoke.sh btrfs /dev/disk/by-partlabel/autosd-store
 ```
+
+`sgdisk` (partitioning) and `mkfs.btrfs` (formatting) both come from an EPEL 10 repo the
+image manifest adds — the AutoSD 10 repos alone do not carry `btrfs-progs`/`gdisk`. `btrfs`
+is the only step in this task that writes to physical storage; the partition-then-format
+sequence above is deliberately manual and not run by the script itself, so the "which device"
+decision stays with the operator's eyes, not buried in a command the operator has to trust.
 
 A genuine `tmpfs` pass stamps `/run/x5h-smoke-tmpfs-passed` before printing
 `SMOKE_tmpfs_PASS`; `btrfs` checks for that stamp before touching anything and prints
@@ -321,30 +338,43 @@ would survive power cycles and sessions, silently pre-authorizing a `btrfs` writ
 boot — so this is worth re-confirming if the boot path ever changes.) A failed unmount at the
 end of a `tmpfs` run withholds the stamp even though `SMOKE_tmpfs_PASS` still prints (the
 podman/network result it reports is genuine; only the "board left clean" promise the stamp
-makes is at stake) — its own `SMOKE_tmpfs_UMOUNT_WARN` marker says so. If you deliberately
-need to run `btrfs` alone — e.g. after a reboot cleared the stamp but you already know
-`tmpfs` is fine — either re-run `tmpfs` again (it costs nothing) or
+makes is at stake) — its own `SMOKE_tmpfs_UMOUNT_WARN` marker says so; a failed stamp write
+itself (or a `/run` that unexpectedly isn't tmpfs) is caught too, as `SMOKE_<mode>_STAMP_WRITE_FAIL`,
+so `SMOKE_tmpfs_PASS` can never print over a stamp that silently didn't land. If you
+deliberately need to run `btrfs` alone — e.g. after a reboot cleared the stamp but you
+already know `tmpfs` is fine — either re-run `tmpfs` again (it costs nothing) or
 `touch /run/x5h-smoke-tmpfs-passed` by hand to override.
+
+The networking check inside each phase is two-stage, mirroring `gate-guest.sh`'s GATE5, and
+only the second stage is decisive: a port-published attempt (`curl http://127.0.0.1:8080/`)
+runs first and is **informational only** — it prints `SMOKE_<mode>_NET_PORT_OK` if it
+unexpectedly succeeds, but its failure never sets the script's fail state. It is expected to
+fail every time under the currently-shipped `firewall_driver = "none"`: netavark's `none`
+driver never installs a DNAT rule, so a published port is unreachable by construction, proven
+in the gate's own green run (the port-published attempt polled ~78 s with zero successful
+curls before the fallback below succeeded). The check that actually decides `SMOKE_<mode>_NET_OK`
+vs. `SMOKE_<mode>_NET_FAIL` is the direct-container-IP path — `podman inspect`'s
+`.NetworkSettings.Networks` range form, the same one the QEMU gate's own fallback uses — run
+automatically, not left for the operator to trigger by hand. If `SMOKE_<mode>_NET_FAIL` still
+prints, both paths already failed automatically; look at `podman0`/`veth0` state and `podman`
+logs next, not at the firewall driver — `50-x5h.conf` already ships the only value this
+netavark accepts.
 
 Each phase prints `SMOKE_<mode>_STORE_FS=<fstype>` right after its mount succeeds (mirroring
 `gate-guest.sh`'s `GATE3_STORE_FS`/`GATE4_STORE_FS`) — check it reads `tmpfs` / `btrfs`
-respectively, not whatever was mounted underneath, before trusting a later `_PASS`. Every run
-ends in one of: `SMOKE_<mode>_PASS`; `SMOKE_<mode>_FAIL` (a podman or network check failed);
-`SMOKE_<mode>_MODPROBE_FAIL`; `SMOKE_<mode>_MOUNT_FAIL`; or, `btrfs` only,
-`SMOKE_<mode>_DEV_FAIL` (bad block device) or `SMOKE_<mode>_TMPFS_GATE_FAIL` (no prior
-`tmpfs` pass) — except an invalid or missing mode argument, which prints a plain
-`usage: ...` line and exits 2 with **no** `SMOKE_` marker at all, since the script hasn't
-chosen a `$MODE` to prefix one with yet. Grep for the full set; if you see none of them, the
-run stopped before producing anything trustworthy — treat that the same as a failure, not as
-a pass.
-
-`btrfs` is the only step in this task that writes to physical storage — the previously-empty
-32 GB UFS LUN. Partitioning that LUN (creating the GPT label) and formatting it
-(`mkfs.btrfs -f <partition>`) are both deliberate manual, eyes-on steps done at the board
-prompt itself, not by this script: the point where the operator confirms by hand that the
-device names the right disk before anything is written to it. `sgdisk` (partitioning) and
-`mkfs.btrfs` come from an EPEL 10 repo the image manifest adds — the AutoSD 10 repos alone
-do not carry `btrfs-progs`/`gdisk`.
+respectively, not whatever was mounted underneath, before trusting a later `_PASS`. `btrfs`
+additionally asserts this itself, machine-enforced rather than left to the operator's eyes
+(mirroring how `qemu-gate.exp` itself requires `GATE4_STORE_FS=btrfs`): a `$DEV` that mounts
+successfully but isn't actually btrfs (e.g. a typo onto a device carrying a real filesystem)
+fails loudly as `SMOKE_<mode>_STORE_FS_FAIL`, before any `podman load` gets a chance to write
+to it. Every run ends in one of: `SMOKE_<mode>_PASS`; `SMOKE_<mode>_FAIL` (a podman or network
+check failed); `SMOKE_<mode>_MODPROBE_FAIL`; `SMOKE_<mode>_MOUNT_FAIL`; or, `btrfs` only,
+`SMOKE_<mode>_DEV_FAIL` (bad block device), `SMOKE_<mode>_TMPFS_GATE_FAIL` (no prior `tmpfs`
+pass), or `SMOKE_<mode>_STORE_FS_FAIL` (mounted, but not actually btrfs) — except an invalid
+or missing mode argument, which prints a plain `usage: ...` line and exits 2 with **no**
+`SMOKE_` marker at all, since the script hasn't chosen a `$MODE` to prefix one with yet. Grep
+for the full set; if you see none of them, the run stopped before producing anything
+trustworthy — treat that the same as a failure, not as a pass.
 
 Site values — server IP, export paths, the `ip=` kernel argument, and the DTB filename —
 live in `x5h-work/HANDOFF.md` on the operator's machine and are never committed to this
@@ -361,4 +391,5 @@ repo.
 | The build succeeds and the gate boots, but never reaches a login prompt; the console shows a repeating cycle of `Timed out waiting for device dev-d…SP.device - /dev/disk/by-label/ESP.` → `Dependency failed for boot-efi.mount` → `Dependency failed for local-fs.target` → `Starting emergency.service - Emergency Shell Override - Reboot...` → `systemd-shutdown[1]: Syncing filesystems and block devices.`, and `qemu-gate.exp` eventually fails with `FATAL: no login prompt within 1800s` (or, after the boot-loop guard below, `FATAL: guest rebooted N times without reaching a login prompt`) | **Not fstab** (an earlier fix neutralized fstab, which was necessary but not sufficient — the cycle continued). aib itself generates and installs an *enabled* `boot-efi.mount` unit into the image (`computed-vars.ipp.yml` copies it to `/usr/lib/systemd/system/boot-efi.mount`, requiring `What=/dev/disk/by-label/ESP`, and adds it to `image_enabled_services`), gated by `use_efipart_mount`/`use_efipart`. Neither the bare ext4 export nor the board's NFS root has an ESP partition, so this unit times out (30 s), `local-fs.target` fails, and AutoSD's `emergency.service` — **"Emergency Shell Override - Reboot"** — reboots the guest instead of dropping to a shell. Forever: 37 reboots were observed in one CI run before the harness's fixed budget ran out. Because this unit ships *inside the rootfs* (not something the gate scripts add), it is not gate-specific — it would have hit the board's NFS-root boot too, over serial, in the one-shot session with the operator present. (`selinux-bools.service` also fails in the same console output, right next to this cycle — see the next row; it is not the cause of the loop and should not be conflated with it.) | Set `use_efipart: false` in `aib/vars.yml`. `computed-vars.ipp.yml` only computes `use_efipart` from `use_ukiboot` "if not already in locals()", so a `--define-file` override wins and `use_efipart_mount` (an unconditional `mpp-eval: use_efipart`) follows it to `false`, which stops `boot-efi.mount` from being generated or enabled at all. Every reference to the EFI partition/device (`build.ipp.yml`'s `base_partitions`, `content.ipp.yml`'s `disk_yaml` partition table, `image.ipp.yml`'s `mkfs.fat` stage and mount/copy device map) lives inside the disk-image-building `image` pipeline, which neither export path exercises (`aib build --tar` never requests a disk output; the gate boots the ext4 export directly via `-kernel`; the board netboots the BSP kernel) — so this only removes an unused disk-image code path, not rootfs content. `use_ukiboot` stays at its default (true); nothing it gates depends on `use_efipart`. **Kept the fstab neutralization too** — the image's fstab genuinely was written for a disk image, and it keeps the gate and board paths symmetric — just don't credit it with fixing this particular loop; a different root cause was hiding behind it. Also hardened `qemu-gate.exp` with a boot-loop guard: it counts `Booting Linux on physical CPU` (the kernel's first boot line, printed once per boot) and fails fast with a distinct diagnostic on the third occurrence, instead of waiting out the full 1800 s budget to notice a loop that was obvious by the second boot — this cost ~2.5 minutes to diagnose the `boot-efi.mount` cause above, instead of 30. |
 | `GATE1_SYSTEMD_STATE=degraded`, with exactly two failed units: `selinux-bools.service` and `ukiboot-set-success.service` | Both expected on this gate/kernel combination, not a bug. `selinux-bools.service` (`[FAILED] Failed to start selinux-bools.service - Enable selinux booleans.`) fails because the BSP-mimic kernel has no `CONFIG_SECURITY_SELINUX`, so `setsebool` has nothing to operate on — itself a real survey answer about running AutoSD userspace on the BSP kernel. `ukiboot-set-success.service` (`"Mark boot as successful in ukibootctl partition"`) fails because `use_efipart: false` (see the `boot-efi.mount` row above) means there is no ukibootctl partition for it to write to. Neither causes the earlier reboot loop — that was `emergency.service` reacting to the (now-fixed) `boot-efi.mount` failure, not either of these two units; they just appear adjacent to it in the console log and are easy to conflate with it. | None needed; recorded here so `degraded` doesn't alarm the board operator and these two failed units aren't mistaken for a live problem. |
 | `GATE3_FAIL` / `GATE4_FAIL` with `Error: ... dial tcp [::1]:443: connect: connection refused` (pinging a registry literally named `localhost`), even though the console shows `Loaded image: docker.io/library/x5h-captest:latest` immediately above it | `gate-guest.sh` hardcoded the loaded captest image as `localhost/x5h-captest:latest`, matching what `podman load` produced on the dev host Task 4 was reviewed on. This guest's podman normalizes the same tar to `docker.io/library/x5h-captest:latest` instead — tag normalization on `load` differs across podman builds/versions, so it was never safe to hardcode. The subsequent `podman run --rm localhost/x5h-captest:latest ...` found no local image and tried to pull from a registry named `localhost`. Separately, `GATE2_EXT4_UNEXPECTED_PASS` rested on `podman load`'s exit status alone, unlike GATE3/GATE4's `load` **+** `getcap` check — a `load` that silently dropped the capability xattr would still have reported a "pass". | `gate-guest.sh` now discovers the loaded tag via `podman images` in all three of GATE2/GATE3/GATE4 (the same pattern GATE5 already used for busybox), guarding against an empty capture before ever calling `podman run`. GATE2 now also runs the same `run` + `getcap` check GATE3/GATE4 have, so `GATE2_EXT4_UNEXPECTED_PASS` requires the capability to actually be readable in a running container, not just a `load` that exited 0 — a `load`-succeeds-but-`getcap`-fails outcome now reports `GATE2_EXT4_FAIL_OK` instead, since that is still the constraint manifesting, just silently. |
-| Console shows `Error: netavark: Must provide a valid firewall backend, got iptables` right after GATE5's first attempt, then the fallback path succeeds and `GATE5_NONE_OK` prints | This image resolves **netavark 2.0.0**. CentOS Stream 10's AppStream repo also carries netavark 1.16.0 and 1.17.2, which still had an `"iptables"` firewall backend (confirmed against `containers/netavark`'s own `src/firewall/mod.rs` at each of those git tags) — but 2.0.0 removed it; only `"firewalld"`, `"nftables"`, and `"none"` are recognized `firewall_driver` values in this netavark, and `"iptables"` is rejected outright as a config-validation error, regardless of what kernel modules are loaded. Separately, `"nftables"` would not work on this kernel anyway (no `CONFIG_NF_TABLES`), and `"firewalld"` needs a running dbus/firewalld daemon this image does not configure — so `"none"` is the only value both accepted by this netavark and functional here, which GATE5 confirmed empirically (`podman0` bridge up, `veth0` in forwarding, direct-container-IP curl succeeding). | `50-x5h.conf` now ships `firewall_driver = "none"` directly instead of `"iptables"`. Reasoning: the board runs this same config and has no gate-side fallback — `board-podman-smoke.sh` only prints a hint for the operator to retry manually on a network failure, it does not auto-retry — so shipping a value this netavark rejects would burn time in the one-shot board session on a failure already known in advance. Regression detection survives no longer shipping `"iptables"`: GATE5's own two-stage structure (try a port-published container, then the direct-IP fallback) actively probes real networking behavior regardless of the starting config, so a future regression in the `none`-driver path itself still shows up as `GATE5_FAIL`. What is no longer independently re-confirmed on every run is specifically whether this netavark still rejects the string `"iptables"` — now a documented, version-pinned fact instead of a per-run probe; it would only need revisiting if the resolved netavark package version itself changes. |
+| Console shows `Error: netavark: Must provide a valid firewall backend, got iptables` right after GATE5's first attempt, then the fallback path succeeds and `GATE5_NONE_OK` prints | This image resolves **netavark 2.0.0**. CentOS Stream 10's AppStream repo also carries netavark 1.16.0 and 1.17.2, which still had an `"iptables"` firewall backend (confirmed against `containers/netavark`'s own `src/firewall/mod.rs` at each of those git tags) — but 2.0.0 removed it; only `"firewalld"`, `"nftables"`, and `"none"` are recognized `firewall_driver` values in this netavark, and `"iptables"` is rejected outright as a config-validation error, regardless of what kernel modules are loaded. Separately, `"nftables"` would not work on this kernel anyway (no `CONFIG_NF_TABLES`), and `"firewalld"` needs a running dbus/firewalld daemon this image does not configure — so `"none"` is the only value both accepted by this netavark and functional here, which GATE5 confirmed empirically (`podman0` bridge up, `veth0` in forwarding, direct-container-IP curl succeeding). | `50-x5h.conf` now ships `firewall_driver = "none"` directly instead of `"iptables"`. Reasoning: the board runs this same config, and shipping a value this netavark rejects outright would burn time in the one-shot board session on a failure already known in advance. (`board-podman-smoke.sh` initially only printed a hint for the operator to retry the direct-container-IP path by hand; a later fix gave it the same automatic port-published-then-direct-IP fallback structure as GATE5 itself, so the board no longer depends on the operator remembering to do that manually — see the Board bring-up section.) Regression detection survives no longer shipping `"iptables"`: GATE5's own two-stage structure (try a port-published container, then the direct-IP fallback) actively probes real networking behavior regardless of the starting config, so a future regression in the `none`-driver path itself still shows up as `GATE5_FAIL`. What is no longer independently re-confirmed on every run is specifically whether this netavark still rejects the string `"iptables"` — now a documented, version-pinned fact instead of a per-run probe; it would only need revisiting if the resolved netavark package version itself changes. |
+| Board console goes silent / root filesystem I/O stalls shortly after boot, with no further output and no recovery over serial | **Not something the QEMU gate can exercise or catch** — this is a board-only, NFS-root-only risk. aib enables `NetworkManager.service` (only `NetworkManager-wait-online.service` is masked); in the gate this is harmless because root is `/dev/vda`. The board's root is NFS over the interface the kernel `ip=` parameter configured, this boot path has no initrd (`uboot/autosd-boot.env` loads only `Image` + DTB), so `nm-initrd-generator` never runs and no `.nmconnection` profile matching that static config exists anywhere in the image. NM starting on the NFS-root NIC with no matching profile is a classic NFS-root wedge: if it reconfigures the interface, root I/O stalls with no local recovery — every binary needed to fix it lives on the filesystem that just went away. Honest caveat: NM's connection-assumption logic *may* leave an already-configured interface alone, in which case nothing observable happens; this could not be confirmed or ruled out off-board. | `stage-nfs-rootfs.sh` masks `NetworkManager.service` in the staged NFS root (`ln -sf /dev/null $DEST/etc/systemd/system/NetworkManager.service`, the same mechanism `systemctl mask` itself uses, and the same one aib already applied to `NetworkManager-wait-online.service`) — applied at staging time, not by rebuilding the image, so it covers the board without touching the gate path at all. Nothing on the board needs NM: the kernel `ip=` parameter already configured the NIC, and netavark/`podman0` does not depend on it (proven in the gate, where GATE5 passed alongside a running NM). This is a deliberate gate/board divergence, in the safe direction, on an axis the gate structurally cannot see — if this row is ever "fixed" by re-enabling NM to match the gate, re-read this row first. |

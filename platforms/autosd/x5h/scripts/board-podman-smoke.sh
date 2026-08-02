@@ -40,9 +40,21 @@ btrfs)
     [ -b "$DEV" ] || { echo "SMOKE_${MODE}_DEV_FAIL ($DEV is not a block device)"; exit 1; }
     modprobe -a btrfs overlay veth bridge br_netfilter \
         || { echo "SMOKE_${MODE}_MODPROBE_FAIL"; exit 1; }
-    mount "$DEV" /var/lib/containers \
+    mount -t btrfs "$DEV" /var/lib/containers \
         || { echo "SMOKE_${MODE}_MOUNT_FAIL"; exit 1; }
-    echo "SMOKE_${MODE}_STORE_FS=$(findmnt -no FSTYPE --target /var/lib/containers | tail -1)"
+    STOREFS="$(findmnt -no FSTYPE --target /var/lib/containers | tail -1)"
+    echo "SMOKE_${MODE}_STORE_FS=$STOREFS"
+    # Machine-enforced, not left to the operator's eyes: the gate's own
+    # equivalent (qemu-gate.exp requiring GATE4_STORE_FS=btrfs before
+    # judging a pass) is enforced by the harness, not just printed. -t
+    # btrfs above already rejects most wrong-fstype devices at mount time,
+    # but this assertion is the belt to that suspenders, and it runs
+    # before any podman load: a $DEV typo onto a device carrying a real
+    # filesystem (e.g. the BSP's own storage) must not silently let the
+    # next podman load write to it -- directly against the plan's
+    # invariant that the only storage written is the previously-empty
+    # 32 GB UFS LUN.
+    [ "$STOREFS" = "btrfs" ] || { echo "SMOKE_${MODE}_STORE_FS_FAIL"; exit 1; }
     ;;
 *)
     echo "usage: $0 tmpfs | btrfs <blockdev>"; exit 2
@@ -81,11 +93,54 @@ fi
 if [ -z "$FAIL" ]; then
     podman run -d --name web -p 8080:80 "$BB" \
         sh -c 'echo ok > /tmp/index.html && exec httpd -f -p 80 -h /tmp'
-    sleep 3
-    if curl -fsS --max-time 10 http://127.0.0.1:8080/ | grep -q ok; then
+    # Port-published attempt: INFORMATIONAL ONLY, must never set FAIL. This
+    # is GATE5's first attempt, and the green gate run's own timeline proved
+    # it dead under firewall_driver=none (what 50-x5h.conf ships): the
+    # port-published container started with veth0 forwarding, the poll ran
+    # ~78s with zero successful curls, and only the direct-container-IP
+    # fallback below succeeded. netavark's "none" driver is a no-op for
+    # setup_port_forward -- no DNAT rule is ever installed, so
+    # 127.0.0.1:8080 is unreachable by construction, not by anything wrong
+    # with this store or this board. Kept anyway so a future
+    # firewall_driver change that makes it viable again shows up here.
+    # Poll rather than a fixed sleep, same reason gate-guest.sh polls: a
+    # short fixed window would misreport a merely-slow start as broken, and
+    # the board is slower than the CI runner the gate ran on.
+    ok=""
+    i=0
+    while [ "$i" -lt 30 ]; do
+        if curl -fsS --max-time 5 http://127.0.0.1:8080/ 2>/dev/null | grep -q ok; then
+            ok=1
+            break
+        fi
+        i=$((i + 1))
+        sleep 2
+    done
+    [ -n "$ok" ] && echo "SMOKE_${MODE}_NET_PORT_OK"
+    # The path the gate actually proved: host -> container by the
+    # container's own bridge IP, the same `podman inspect` form
+    # gate-guest.sh's GATE5 fallback uses (docker-compat .IPAddress can
+    # come back empty under netavark; the .Networks range form does not).
+    # THIS is the check that sets FAIL, not the port-published attempt
+    # above -- a prior round wrongly made the port-published attempt
+    # decisive, which would have failed SMOKE_tmpfs on every board run
+    # regardless of store health, and because tmpfs gates btrfs via the
+    # stamp interlock, would have blocked the btrfs phase too.
+    IP="$(podman inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' web 2>/dev/null)"
+    ok=""
+    i=0
+    while [ "$i" -lt 30 ]; do
+        if [ -n "$IP" ] && curl -fsS --max-time 5 "http://$IP/" 2>/dev/null | grep -q ok; then
+            ok=1
+            break
+        fi
+        i=$((i + 1))
+        sleep 2
+    done
+    if [ -n "$ok" ]; then
         echo "SMOKE_${MODE}_NET_OK"
     else
-        echo "SMOKE_${MODE}_NET_FAIL (50-x5h.conf already ships firewall_driver=none, the only value this netavark accepts and the gate proved working -- look at podman0/veth state or podman logs, not the firewall driver)"
+        echo "SMOKE_${MODE}_NET_FAIL (try firewall none / direct container IP, as in the QEMU gate -- both the port-published and the direct-container-IP path were already tried automatically above and both failed, so look at podman0/veth state and podman logs next)"
         FAIL=1
     fi
     podman rm -f web >/dev/null 2>&1
@@ -111,8 +166,28 @@ if [ -n "$FAIL" ]; then
     exit 1
 fi
 
-# Only a genuine, complete tmpfs pass AND a clean unmount unlock the btrfs arm.
+# Only a genuine, complete tmpfs pass AND a clean unmount unlock the btrfs
+# arm -- and the write itself is verified, not assumed. There is no set -e
+# in this script, so an unguarded ": > $TMPFS_STAMP" whose write silently
+# failed (e.g. permission, or /run not actually mounted) would still fall
+# through to SMOKE_tmpfs_PASS below, leaving the operator staring at a
+# pass while the btrfs arm mysteriously refuses with TMPFS_GATE_FAIL. The
+# findmnt check is the same upgrade SMOKE_*_STORE_FS already got: it
+# confirms the stamp is landing on the boot-scoped tmpfs /run actually is
+# (see the Board bring-up section on why that scoping matters), not
+# silently on whatever /run happens to resolve to.
 if [ "$MODE" = "tmpfs" ] && [ -n "$UMOUNT_OK" ]; then
-    : > "$TMPFS_STAMP"
+    STAMPFS="$(findmnt -no FSTYPE --target /run | tail -1)"
+    if [ "$STAMPFS" = "tmpfs" ]; then
+        : > "$TMPFS_STAMP" || { echo "SMOKE_${MODE}_STAMP_WRITE_FAIL"; FAIL=1; }
+    else
+        echo "SMOKE_${MODE}_STAMP_WRITE_FAIL (/run is $STAMPFS, not tmpfs -- refusing a stamp that would not be boot-scoped)"
+        FAIL=1
+    fi
+fi
+
+if [ -n "$FAIL" ]; then
+    echo "SMOKE_${MODE}_FAIL"
+    exit 1
 fi
 echo "SMOKE_${MODE}_PASS"
