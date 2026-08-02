@@ -1,2 +1,38 @@
 containers_read_only: false
 disable_ipv6: false
+
+# btrfs is the only viable persistent container store on the X5H's BSP
+# kernel (no CONFIG_XFS_FS, no CONFIG_F2FS_FS, ext4 has no security
+# xattrs), so btrfs-progs is not optional; gdisk is needed alongside it.
+# Both packages were moved out of the AutoSD 10 / CentOS Stream 10 repos
+# upstream and now live in EPEL 10 (verified present at
+# https://dl.fedoraproject.org/pub/epel/10/Everything/aarch64/Packages/{b/btrfs-progs-6.12-3.el10_0,g/gdisk-1.0.10-2.el10_0}.aarch64.rpm).
+#
+# baseurl is a literal "aarch64", not "$arch": values reaching aib through
+# --define-file land in the mpp preprocessor's `overrides` dict (see
+# mpp/aib-osbuild-mpp's `-D/--define` handling), which is merged into
+# variable lookups verbatim and is never itself passed through the
+# `$variable` template-substitution pass that manifest-native mpp-vars
+# blocks get -- so "$arch" here would stay a literal, unresolved
+# substring rather than expanding to "aarch64". This platform is aarch64
+# only (the X5H board), so hardcoding is not a portability loss.
+#
+# gpgcheck: false is deliberate, not a shortcut: aib's repo schema
+# (_SUPPORTED_REPO_KEYS in mpp/aib-osbuild-mpp) has no per-repo gpgkey
+# field at all, only a per-repo gpgcheck boolean -- GPG trust is otherwise
+# a single global key list (distro_gpg_keys, currently just the CentOS
+# Stream 10 key) shared by every repo. Disabling gpgcheck for this one
+# repo (which is exactly what dnf's own gpgcheck=0 does for a .repo file)
+# avoids a GPG failure without touching that global list or affecting
+# verification of any other repo's packages. The alternative -- appending
+# EPEL's own key to distro_gpg_keys so gpgcheck could stay on -- was
+# considered and rejected for this iteration: it requires overriding a
+# scalar the distro file already sets (replacing, not merging) and
+# embedding a large PEM block by hand, which is more can go wrong in a
+# single edit than this fork-only CI validation build's threat model
+# justifies. The fetch itself is HTTPS from the official Fedora mirror.
+extra_repos:
+  - id: epel10
+    baseurl: https://dl.fedoraproject.org/pub/epel/10/Everything/aarch64/
+    priority: 15
+    gpgcheck: false

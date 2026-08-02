@@ -80,29 +80,33 @@ jobs:
           sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
             bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build-builder --distro autosd10-sig
 
-      - name: Build the x5h rootfs container image
-        # `aib build` on this CLI generation produces a bootc container
-        # image (to the podman store), not a package/ext4/tar export --
-        # those flags do not exist any more. The tar and ext4 exports this
-        # job still needs are derived from this container in the next two
-        # steps.
+      - name: Dump resolved aib variables (confirms extra_repos took effect)
+        # Diagnostic only, not gate-blocking: --dump-variables prints the
+        # fully-resolved variable set for this exact manifest/define-file
+        # combination and exits before building, so a wrong or dropped
+        # extra_repos entry (e.g. the $arch-in---define-file pitfall noted
+        # in vars.yml) shows up here directly instead of being inferred
+        # from whether the depsolve below happens to succeed or fail.
+        run: |
+          cd platforms/autosd/x5h
+          sudo bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build --dump-variables --tar \
+            --distro autosd10-sig --target qemu \
+            --define-file aib/vars.yml \
+            aib/x5h-rootfs.aib.yml aib/x5h-rootfs.tar 2>&1 | grep -A8 '"extra_repos"' || true
+
+      - name: Build the x5h rootfs tar (aib build --tar)
+        # --tar builds a tar file with the container content directly,
+        # instead of a container image -- this replaces a build + podman
+        # create + podman export round trip with a single aib invocation,
+        # removing the root-vs-user podman store question entirely and
+        # cutting a step from the critical path.
         run: |
           cd platforms/autosd/x5h
           sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
-            bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build \
+            bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build --tar \
             --distro autosd10-sig --target qemu \
             --define-file aib/vars.yml \
-            aib/x5h-rootfs.aib.yml localhost/x5h-rootfs:latest
-
-      - name: Derive the rootfs tar via podman export
-        # aib built the image under sudo, so it lives in root's podman
-        # store (bind-mounted onto the non-overlay location above) -- the
-        # export must run with the same privilege and against that store.
-        run: |
-          cd platforms/autosd/x5h
-          cid=$(sudo podman create localhost/x5h-rootfs:latest /bin/true)
-          sudo podman export "$cid" -o aib/x5h-rootfs.tar
-          sudo podman rm "$cid"
+            aib/x5h-rootfs.aib.yml aib/x5h-rootfs.tar
           ls -lh aib/x5h-rootfs.tar
 
       - name: Inspect the tar export (podman present, btrfs-progs present, no ostree-repo layout)
