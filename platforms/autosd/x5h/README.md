@@ -10,7 +10,7 @@ answered before board time.
 
 ## Folder Structure
 
-- `aib/`: automotive-image-builder manifest (distro `autosd10-sig`, package mode)
+- `aib/`: automotive-image-builder manifest (distro `autosd10-sig`)
 - `config/`: containers.conf drop-in shipped into the image
 - `kernel/`: mimic-kernel config fragment + build script (QEMU gate only, never for the board)
 - `scripts/`: QEMU gate harness and board staging/smoke scripts
@@ -124,14 +124,19 @@ table would be a set of assertions; with them it is a set of measurements.
 | 2. Does podman's default container store carry the `security.capability` xattr on ext4 without `EXT4_FS_SECURITY`? | `GATE2_STORE_FS=ext4`, `GATE2_EXT4_FAIL_OK` | Measured on ext4 (`GATE2_STORE_FS` confirms it — no mount is performed for GATE2, so this is the root export's own filesystem). `podman load` succeeded, but a follow-up `getcap` inside a running container did not find the capability. | **No** — the default container store on ext4 without `EXT4_FS_SECURITY` cannot carry `security.capability`, so it is unusable as shipped; the board needs an alternative store (findings 3-4). **This verdict was wrong once already, and the reason is worth more than the verdict itself:** the previous CI cycle reported `GATE2_EXT4_UNEXPECTED_PASS` — a false positive, because `podman load` alone exits 0 even when the xattr is silently dropped. Only after GATE2 was given the same `run` + `getcap` confirmation GATE3/GATE4 already had did this, the real answer, emerge. A load-only check is not sufficient evidence for this question on this filesystem; treat any future variant of this probe that skips the `getcap` step with the same suspicion. |
 | 3. Does a tmpfs-backed container store work? | `GATE3_STORE_FS=tmpfs`, `GATE3_TMPFS_OK` | Measured on tmpfs (`GATE3_STORE_FS` confirms it, guarding against a silently-failed mount leaving the probe on the ext4 root underneath). `podman load` + `getcap` in a running container both succeeded — the capability round-trips. | **Yes.** tmpfs carries the capability xattr correctly. It is volatile — RAM-backed, gone on reboot — so it is useful as a scratch/ephemeral store, not as the board's primary persistent one. |
 | 4. Does a btrfs-backed container store on a second disk work? | `GATE4_STORE_FS=btrfs`, `GATE4_BTRFS_OK` | Measured on btrfs (`GATE4_STORE_FS` confirms it — the blank second QEMU disk, `mkfs.btrfs -f` then mounted). `podman load` + `getcap` both succeeded. | **Yes**, and it is the *only* viable **persistent** option on this board: the BSP kernel has `# CONFIG_XFS_FS is not set` and `# CONFIG_F2FS_FS is not set`, and ext4 is ruled out by finding 2 above. This is exactly what makes the EPEL 10 `btrfs-progs`/`gdisk` dependency (first Troubleshooting row) non-negotiable, not a convenience choice. |
-| 5. Does container networking (netavark) work without `NF_TABLES`? | `GATE5_NONE_OK` | Container networking worked with `firewall_driver = "none"`: a direct-container-IP HTTP request succeeded, which is that marker's own pass condition. (The `podman0` bridge coming up and `veth0` entering forwarding were directly observed in console output from the prior cycle, under this same, unchanged `gate-guest.sh` GATE5 logic — noted here as corroborating detail, not re-observed verbatim in this specific run's log excerpt.) | **Yes, with `firewall_driver = "none"`** — not with `"iptables"`, which is not something a future reader should retry: netavark 2.0.0 (what this image resolves) removed that backend outright, a hard config-validation rejection independent of any kernel capability (see the netavark Troubleshooting row for the version check). **Not yet confirmed, and flagged rather than assumed:** this proves networking works with `firewall_driver = "none"` on the *mimic* kernel only. The board runs the real BSP kernel with `x_tables` modules loaded from the copied module tree — a different kernel, a different module set, the same shipped config. Whether container networking also works there is what the board session still has to confirm; it is not established by this gate. |
+| 5. Does container networking (netavark) work without `NF_TABLES`? | `GATE5_NONE_OK` | Container networking worked with `firewall_driver = "none"`: a direct-container-IP HTTP request succeeded, which is that marker's own pass condition. (The `podman0` bridge coming up and `veth0` entering forwarding were directly observed in console output from the prior cycle, under this same, unchanged `gate-guest.sh` GATE5 logic — noted here as corroborating detail, not re-observed verbatim in this specific run's log excerpt.) | **Yes, with `firewall_driver = "none"`** — not with `"iptables"`, which is not something a future reader should retry: netavark 2.0.0 (what this image resolves) removed that backend outright, a hard config-validation rejection independent of any kernel capability (see the netavark Troubleshooting row for the version check). **Not yet confirmed, and flagged rather than assumed:** this proves networking works with `firewall_driver = "none"` on the *mimic* kernel only. The board runs the real BSP kernel with `x_tables` modules loaded from the copied module tree — a different kernel, a different module set, the same shipped config. Whether container networking also works there is what the board session still has to confirm; it is not established by this gate. **Narrower than "networking works" on its own might also suggest, independent of the mimic-vs-board-kernel caveat above:** what this gate actually proved is *host → container*, by the container's own bridge IP. `firewall_driver = "none"` means netavark installs no rules at all — not only no port-forward (already covered above, and is exactly why GATE5's first attempt fails structurally every time), but also no masquerade rule, so container → external (LAN/internet) traffic is not SNAT'd. Nothing run so far, on either kernel, exercises outbound container connectivity at all — a gap that matters beyond this branch, since the VisionPilot workloads this platform exists to host will need it. |
 
-The gate itself consumed roughly 430 s of guest-visible wall clock, under
-same-arch TCG with no `/dev/kvm` on the CI runner — comfortably inside
-`qemu-gate.exp`'s 900 s inactivity budget (see above). That budget was tuned
-from desk arithmetic before any gate had ever run end to end; this is the
-first real timing signal for it, and it confirms the budget is sound —
-retiring that open risk.
+The gate consumed roughly 430 s of guest-visible wall clock in total, under
+same-arch TCG with no `/dev/kvm` on the CI runner. But `qemu-gate.exp`'s
+900 s budget is an *inactivity* timeout, not a total-runtime one, so the
+number that actually validates it is the largest gap between two
+consecutive markers, not the sum of all of them: in this run that gap was
+112 s (`GATE4_BTRFS_OK` → `GATE5_NONE_OK`; next largest 88 s and 84 s) —
+comfortably inside the 900 s budget with roughly 8x headroom, not the ~2x a
+total-runtime comparison would suggest. That budget was tuned from desk
+arithmetic before any gate had ever run end to end; this is the first real
+timing signal for it, and it confirms the budget is sound — retiring that
+open risk.
 
 ## Running locally
 
@@ -139,25 +144,32 @@ The same gate CI ran can be replayed on an x86 dev host, from the CI
 artifacts, without rebuilding anything. Two reasons this is worth doing
 beyond interactive debugging: it is the only place the tar → ext4
 reassembly gets exercised outside CI, and that reassembly is exactly what
-`scripts/stage-nfs-rootfs.sh` does for the board's NFS root (`tar xf
-<tarball> -C <dest-dir>`) — so a green local replay is corroborating
-evidence for the board staging path, not just a debugging convenience. It
-also leaves a local copy of `x5h-rootfs.tar` on disk, which is what
-`stage-nfs-rootfs.sh` consumes at board time.
+`scripts/stage-nfs-rootfs.sh` does for the board's NFS root (`tar --xattrs
+--xattrs-include='*.*' -xf <tarball> -C <dest-dir>`) — so a green local
+replay is corroborating evidence for the board staging path, not just a
+debugging convenience. It also leaves a local copy of `x5h-rootfs.tar` on
+disk, which is what `stage-nfs-rootfs.sh` consumes at board time.
 
 Host tools: `gh` (authenticated), `qemu-system-aarch64` and `qemu-img`
 (Debian/Ubuntu: packages `qemu-system-arm` and `qemu-utils` — `qemu-img` is
 what `run-qemu-gate.sh` shells out to when `/tmp/x5h-blank.img` doesn't
 already exist, so it's a runtime dependency of this replay, not a build-only
 one), `expect` (the `qemu-gate.exp` interpreter), and `e2fsprogs` for
-`mkfs.ext4`. CI's "Install host tools" step installs these same four plus
-`podman`, `skopeo`, `flex`, `bison`, `libssl-dev`, `libelf-dev`, and `bc` —
-that remainder is the aib/kernel/container-build toolchain, needed only to
-produce the artifacts this replay downloads pre-built, not to boot them.
+`mkfs.ext4`. CI's "Install host tools" step installs `podman`, `skopeo`,
+`qemu-system-arm`, `qemu-utils`, `expect`, `flex`, `bison`, `libssl-dev`,
+`libelf-dev`, and `bc` — `e2fsprogs` and `gh` are not in that list because
+GitHub-hosted runners ship both preinstalled already; the
+`flex`/`bison`/`libssl-dev`/`libelf-dev`/`bc` portion is the aib/kernel/
+container-build toolchain, needed only to produce the artifacts this replay
+downloads pre-built, not to boot them.
 
 Everything through downloading and unpacking the artifact runs as your own
-user. Loop-mounting the ext4 export and running `qemu-gate.exp` need root —
-those two commands below are prefixed `sudo` and are the only ones that are.
+user. Loop-mounting the ext4 export (step 3's `mount`/`tar`/`umount`) and
+running `qemu-gate.exp` (step 5) need root, so those four commands below are
+prefixed `sudo`. Step 4's `inject-test-images.sh` also needs root for its
+own loop mount, but sudoes internally rather than needing its own invocation
+prefixed — its `sudo mount`/`sudo cp`/`sudo umount` calls are what require
+root, not `./scripts/inject-test-images.sh` itself.
 
 ```bash
 cd platforms/autosd/x5h
