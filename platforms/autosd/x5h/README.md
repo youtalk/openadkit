@@ -145,10 +145,15 @@ evidence for the board staging path, not just a debugging convenience. It
 also leaves a local copy of `x5h-rootfs.tar` on disk, which is what
 `stage-nfs-rootfs.sh` consumes at board time.
 
-Host tools: `gh` (authenticated), `qemu-system-aarch64` (Debian/Ubuntu:
-package `qemu-system-arm`), `expect`, and `e2fsprogs` for `mkfs.ext4` — the
-same set CI's "Install host tools" step installs, minus the pieces only
-needed to build the image and test containers from scratch.
+Host tools: `gh` (authenticated), `qemu-system-aarch64` and `qemu-img`
+(Debian/Ubuntu: packages `qemu-system-arm` and `qemu-utils` — `qemu-img` is
+what `run-qemu-gate.sh` shells out to when `/tmp/x5h-blank.img` doesn't
+already exist, so it's a runtime dependency of this replay, not a build-only
+one), `expect` (the `qemu-gate.exp` interpreter), and `e2fsprogs` for
+`mkfs.ext4`. CI's "Install host tools" step installs these same four plus
+`podman`, `skopeo`, `flex`, `bison`, `libssl-dev`, `libelf-dev`, and `bc` —
+that remainder is the aib/kernel/container-build toolchain, needed only to
+produce the artifacts this replay downloads pre-built, not to boot them.
 
 Everything through downloading and unpacking the artifact runs as your own
 user. Loop-mounting the ext4 export and running `qemu-gate.exp` need root —
@@ -199,14 +204,19 @@ rmdir "$mnt"
 ./scripts/inject-test-images.sh /tmp/x5h-replay.ext4 \
   "$(dirname "$(find /tmp/x5h-bundle -name busybox-oci.tar)")"
 
-# 5. Run the gate. On this x86 host, run-qemu-gate.sh's aarch64+/dev/kvm
-#    check is always false, so this is cross-arch TCG — materially slower
-#    than CI's same-arch TCG (~430 s of guest time in run 30730519760, per
-#    "Gate verdict" above). There is no verified local number for cross-arch
-#    TCG; expect it to run considerably longer and budget accordingly rather
-#    than trusting a specific figure. qemu-gate.exp's inactivity timeout
-#    re-arms on every marker, so a slow-but-progressing run will not be
-#    killed early.
+# 5. Run the gate. /tmp/x5h-blank.img is deliberately not pre-created here:
+#    run-qemu-gate.sh makes it itself (`qemu-img create -f raw ... 8G`) when
+#    the path doesn't exist yet, the same fallback CI relies on rather than
+#    pre-creating it — which is why qemu-img (qemu-utils) is a listed
+#    prerequisite above, not an optional one.
+#    On this x86 host, run-qemu-gate.sh's aarch64+/dev/kvm check is always
+#    false, so this is cross-arch TCG — materially slower than CI's
+#    same-arch TCG (~430 s of guest time in run 30730519760, per "Gate
+#    verdict" above). There is no verified local number for cross-arch TCG;
+#    expect it to run considerably longer and budget accordingly rather than
+#    trusting a specific figure. qemu-gate.exp's inactivity timeout re-arms
+#    on every marker, so a slow-but-progressing run will not be killed
+#    early.
 sudo ./scripts/qemu-gate.exp ./scripts/run-qemu-gate.sh \
   "$(find /tmp/x5h-bundle -name Image)" /tmp/x5h-replay.ext4 \
   /tmp/x5h-blank.img /tmp/x5h-local-gate.log
