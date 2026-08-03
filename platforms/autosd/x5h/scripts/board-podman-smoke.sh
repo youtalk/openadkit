@@ -61,6 +61,29 @@ btrfs)
     ;;
 esac
 
+# Clear the transient store's runroot before any podman call. This is not
+# hygiene, it is required on the board: AutoSD ships
+# /usr/share/containers/storage.conf with transient_store = true, so the
+# storage database lives in the runroot (/run/containers/storage) rather
+# than under the graphroot. podman-clean-transient.service runs at boot,
+# long before this script mounts anything, and at that moment
+# /var/lib/containers is still the NFS root -- where overlay is refused
+# outright ("'overlay' is not supported over nfs"). The unit fails, but it
+# has already written db.sql + overlay/ into the runroot recording that
+# verdict, and every later podman invocation in the same boot reuses it --
+# so podman keeps reporting the store as NFS even once a tmpfs or btrfs
+# store IS mounted over /var/lib/containers and stat -f confirms it. That
+# reproduced exactly on the board: SMOKE_tmpfs_STORE_FS=tmpfs immediately
+# followed by SMOKE_tmpfs_LOAD_FAIL with the nfs message, while the same
+# load against a fresh --root/--runroot pair succeeded. Removing this
+# directory is safe by construction -- it is transient state on /run that
+# containers/storage recreates on demand -- and it is also wanted BETWEEN
+# phases, since each phase mounts a different store underneath a database
+# that would otherwise still describe the previous one.
+# The QEMU gate cannot catch this: its root is ext4 on /dev/vda, so the
+# boot-time unit succeeds there and leaves healthy state behind.
+rm -rf /run/containers/storage
+
 # From here on, record failures in FAIL instead of exiting immediately, so
 # every run reaches exactly one terminal marker -- SMOKE_<mode>_PASS or
 # SMOKE_<mode>_FAIL -- and the tmpfs cleanup below always runs.
@@ -154,9 +177,27 @@ fi
 # stuck tmpfs mount breaks that promise even when podman itself worked.
 UMOUNT_OK=
 if [ "$MODE" = "tmpfs" ]; then
-    if umount /var/lib/containers; then
-        UMOUNT_OK=1
-    else
+    # Retry rather than deciding on the first attempt: `podman rm -f` returns
+    # as soon as the container is killed, but conmon/crun exit and podman's
+    # own container-cleanup run asynchronously after it, and until they are
+    # done something still holds the store. Observed on the board as a single
+    # "umount: /var/lib/containers: target is busy" immediately after an
+    # otherwise clean SMOKE_tmpfs_PASS -- a plain retry seconds later
+    # succeeded with no sub-mounts and no containers left, so this is a race
+    # with teardown, not a leak. Deciding on the first attempt withheld the
+    # interlock stamp and blocked the btrfs phase for no real reason. A
+    # genuinely stuck mount still fails: it just takes ~20 s to say so.
+    i=0
+    while [ "$i" -lt 10 ]; do
+        if umount /var/lib/containers 2>/dev/null; then
+            UMOUNT_OK=1
+            break
+        fi
+        i=$((i + 1))
+        sleep 2
+    done
+    if [ -z "$UMOUNT_OK" ]; then
+        umount /var/lib/containers
         echo "SMOKE_${MODE}_UMOUNT_WARN (stale tmpfs mount may remain over the ext4 root; tmpfs-pass stamp withheld)"
     fi
 fi
