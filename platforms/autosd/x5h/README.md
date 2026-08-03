@@ -284,15 +284,21 @@ Before touching the U-Boot environment, capture a full `printenv` to the session
 is what makes the next step reversible. The default `bootcmd` is **never** modified; only a
 new `bootcmd_autosd` variable is added, from the `uboot/autosd-boot.env` template.
 
-The template's `${...}` placeholders are of two kinds: `serverip`, `kernel_addr_r`, and
-`fdt_addr_r` are already defined by this board's U-Boot environment (built-ins); the rest
+The template's `${...}` placeholders are of three kinds. `serverip` is already defined by
+this board's U-Boot environment. `kernel_addr_r` and `fdt_addr_r` **may not be** — this
+board's own default `bootcmd` loads to literal addresses rather than through those
+variables, and an undefined `${kernel_addr_r}` expands to nothing, silently demoting
+`tftp ${kernel_addr_r} Image` to a load at `${loadaddr}`: a wrong-address load that still
+looks like a working command. Run `printenv kernel_addr_r fdt_addr_r` first and, if either
+is "not defined", `setenv` it to the matching literal address read out of the `printenv`
+backup taken at the start of the session (never a guessed address). The rest
 (`autosd_export_path`, `bootargs_bsp`, `board_ip_config`, `dtb_file`) are operator-supplied
 from `x5h-work/HANDOFF.md` (not committed to this repo) and must all be `setenv` at the
 prompt **before the first line of the template**, not merely before `bootargs_autosd` —
 `autosd_export_path` is consumed by the *first* line (`autosd_nfsroot`), which is unquoted
 and therefore expands immediately, exactly like the double-quoted `bootargs_autosd` line
 that follows it. Setting `autosd_export_path` only after `autosd_nfsroot` has already run
-still bakes an empty export path into it (`nfsroot=<ip>:,vers=3,tcp`), and that string is
+still bakes an empty export path into it (`nfsroot=<ip>:,nfsvers=3`), and that string is
 plausible enough to pass a casual glance. After entering all three lines, read back
 `printenv autosd_nfsroot bootargs_autosd` and check that the export path and the `ip=`
 config are actually present in the output — not just that the strings "look complete" —
@@ -301,6 +307,15 @@ then boot the AutoSD NFS root with:
 ```
 run bootcmd_autosd
 ```
+
+The template chains `bootcmd_autosd`'s four commands with `&&`, not `;`. That is a hard
+requirement of how these lines reach the board, not a style choice: the console sender types
+through tmux `send-keys -l`, whose argument parser swallows a bare `;` as its own command
+separator, so a semicolon never arrives. `&&` also matches this board's default `bootcmd`
+and stops the chain on a failed `tftp` instead of `booti`-ing whatever was already at that
+address. For the same reason the `nfsroot=` options are just `nfsvers=3` — the exact option
+string the BSP netboot is proven to mount with on this hardware (`proto=tcp` is already the
+kernel default here, as `findmnt` on the running BSP shows).
 
 Once logged in, `systemctl is-system-running` reporting `degraded` is expected, not a fault
 — the QEMU gate reproduces the identical state from exactly two known-benign failed units
