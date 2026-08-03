@@ -184,6 +184,22 @@ Artifacts (also staged into the CI debugging bundle): `Image-autosd`,
 `r8a78000-ironhide-uio-autosd.dtb`, `modules-6.1.102-autosd.tar`,
 `kernelrelease.txt`, `config-autosd.txt`.
 
+**One deliberate functional divergence from the board's own config:
+`CONFIG_EXTRA_FIRMWARE` is emptied.** The board bakes three Renesas PCIe6
+blobs (`rcar_gen5_mp_phy.bin`, `rcar_gen5_pcie6_iccm.bin`,
+`rcar_gen5_pcie6_dccm.bin`) into its kernel, and the public source tree does
+not carry them — they ship only in the NDA R-Car xOS SDK, so a from-source
+build fails outright without them. They are requested exclusively by
+`drivers/pci/controller/dwc/pcie6-rcar-gen5.c`, and the board's own BSP
+kernel loads them only to report `pcie6-rcar da000000.pcie: Phy link never
+came up` — nothing is attached to PCIe6 as this board is configured, and
+neither netboot (TSN, `tsn5`) nor storage (UFS `sda`-`sdd` plus eMMC) goes
+through it. So the rebuilt kernel has no PCIe6 firmware and the BSP kernel
+does; on this hardware that is a difference without an observable
+consequence. A later phase that actually needs PCIe6 must restore the
+board's original value *and* solve getting the blobs to CI. See the comment
+block in `kernel/autosd.config` for the full reasoning.
+
 ### Gate markers (rebuilt-kernel edition)
 
 This is the marker vocabulary `gate-guest.sh` and `qemu-gate.exp` actually
