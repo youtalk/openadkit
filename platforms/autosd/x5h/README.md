@@ -253,6 +253,7 @@ carries the full BSP/rebuilt value table); the script prints the exact
 ```
 U-Boot (rebuilt): setenv kernel_file Image-autosd ; setenv dtb_file r8a78000-ironhide-uio-autosd.dtb ; setenv selinux_arg enforcing=0
 U-Boot (rollback): setenv kernel_file Image ; setenv dtb_file <bsp-dtb> ; setenv selinux_arg selinux=0
+  NOTE: selinux_arg expands at 'setenv bootargs_autosd' time, not at 'run' time -- after setenv'ing it, re-enter the bootargs_autosd line from uboot/autosd-boot.env before 'run bootcmd_autosd', or the old value stays baked in.
 ```
 
 Rollback is **not** just those three variables set back to the BSP values.
@@ -270,7 +271,13 @@ Rollback ALSO needs: rm -f <staged-nfs-root>/etc/containers/containers.conf.d/60
 Fallback chain if the rebuilt kernel misbehaves, weakest change first:
 `enforcing=0` (default, permissive) → `selinux_arg=selinux=0` (SELinux out
 of the equation entirely, still the rebuilt kernel and nftables) → the full
-rollback above (BSP kernel, BSP U-Boot values, drop-in removed).
+rollback above (BSP kernel, BSP U-Boot values, drop-in removed). The middle
+rung is not just `setenv selinux_arg selinux=0`: `selinux_arg` expands at
+`setenv bootargs_autosd` time (see `uboot/autosd-boot.env`'s header), so
+that variable alone changes nothing already baked into `bootargs_autosd` —
+re-enter the `setenv bootargs_autosd "..."` line with the new value before
+`run bootcmd_autosd`, or the boot proceeds with the old, already-expanded
+value and no error.
 
 Smoke order on the rebuilt kernel (Board bring-up, step 3): `tmpfs` →
 `ext4loop` (a zero-mutation `EXT4_FS_SECURITY` proof on a `/run`-backed loop
@@ -281,6 +288,20 @@ listener on the host PC: `python3 -m http.server 8099 --bind 192.168.0.1` —
 `board-podman-smoke.sh`'s `SMOKE_EXT_URL` env var overrides the target if
 the site's addressing differs, and `SMOKE_EXT_URL=skip` skips the probe
 entirely instead of failing it.
+
+GATE7 proves SELinux loads and is permissive on an **ext4** root, where
+every file carries the `security.selinux` xattr baked in by the image. The
+board's root is **NFSv3, which carries no xattrs at all** — every object
+gets a single `genfscon` context instead. Permissive mode means it still
+works either way, but the labelling state the board actually runs under is
+not the one GATE7 measured: the gate proves SELinux loads and is
+permissive, not that the board's per-file labelling is correct. This
+matters at the console, not just in principle — permissive-mode AVC
+denials print at `KERN_WARNING`, and enough of them can make a slow serial
+console unusable. Run `dmesg -n 1` right after logging in on the rebuilt
+kernel to keep denial spam off the console before it becomes a problem.
+`selinux_arg=selinux=0` (see the re-`setenv bootargs_autosd` caveat above)
+is the escape hatch if AVC output floods it anyway.
 
 ### Survey §7 addendum
 
@@ -470,8 +491,17 @@ exactly like the double-quoted `bootargs_autosd` line that follows it. Setting
 path into it (`nfsroot=<ip>:,nfsvers=3`), and that string is plausible enough to pass a
 casual glance. After entering all three lines, read back `printenv autosd_nfsroot
 bootargs_autosd` and check that the export path and the `ip=` config are actually present in
-the output — not just that the strings "look complete" — then boot the AutoSD NFS root
-with:
+the output — not just that the strings "look complete".
+
+The board's saved U-Boot environment may already hold a `bootcmd_autosd` from a previous
+session, with the kernel filename hardcoded instead of `${kernel_file}` — `setenv` replaces a
+variable outright, but only when re-entered, so skipping straight to `run bootcmd_autosd` on a
+board that already has one saved runs *that* stale command, hardcoded filename and all,
+ignoring whatever `kernel_file`/`dtb_file`/`selinux_arg` were just `setenv`'d. Always re-enter
+all three `setenv` lines above first. Then read back `printenv bootcmd_autosd` — not
+`bootargs_autosd`, which a stale `bootcmd_autosd` can still produce a plausible-looking value
+for — and confirm `${kernel_file}` appears **unexpanded** in the output. Only then boot the
+AutoSD NFS root with:
 
 ```
 run bootcmd_autosd
