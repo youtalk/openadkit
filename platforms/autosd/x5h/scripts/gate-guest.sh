@@ -107,7 +107,13 @@ fi
 ok=""
 i=0
 while [ "$i" -lt 5 ]; do
-    if podman run --rm "$BB" wget -q -O /dev/null http://10.0.2.2:8099/ 2>/dev/null; then
+    # -T 10: bound the per-attempt cost in code, not just in the inactivity-
+    # budget comment's arithmetic. This is precisely the failure this probe
+    # exists to catch (masquerade rule missing -> SYN black-holed), and an
+    # unanswered SYN otherwise blocks for the kernel's syn-retry ceiling
+    # (~127s), silently eating the qemu-gate.exp inactivity budget instead
+    # of failing fast.
+    if podman run --rm "$BB" wget -T 10 -q -O /dev/null http://10.0.2.2:8099/ 2>/dev/null; then
         ok=1
         break
     fi

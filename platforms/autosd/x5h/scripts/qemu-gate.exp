@@ -79,10 +79,13 @@ send "sh /var/lib/autosd-test/gate-guest.sh\r"
 # nothing re-arms the timer for that whole block. That stretch is bounded
 # arithmetically, not by a TCG-speed guess: the nftables port-publish poll
 # is 30 iterations of (curl --max-time 5 + sleep 2) = 210s, and the
-# outbound-SNAT poll is 5 iterations of (podman run ... wget, budgeted
-# ~10s per attempt + sleep 2) = 60s (both are wall-clock, not CPU-bound, so
-# TCG slowness doesn't shrink them), plus a busybox podman load, two
-# "podman run" invocations (the web server and the wget probe), and a
+# outbound-SNAT poll is 5 iterations of (podman run ... wget -T 10 + sleep
+# 2) = 60s. wget's -T 10 is what makes that second bound real, not just
+# asserted: an unanswered SYN -- the exact failure this probe exists to
+# catch -- would otherwise block for the kernel's syn-retry ceiling
+# (~127s), not 10s (both loops are wall-clock, not CPU-bound, so TCG
+# slowness doesn't shrink them), plus a busybox podman load, two "podman
+# run" invocations (the web server and the wget probe), and a
 # "podman rm -f" in between -- process-spawn overhead that does scale with
 # TCG speed, budgeted at up to ~30-60s per operation. That totals well
 # under the retired GATE5's two-loop worst case (~590s), so
