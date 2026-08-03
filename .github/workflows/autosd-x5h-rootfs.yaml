@@ -230,7 +230,7 @@ jobs:
           grep -E 'GATE[0-9_]+' /tmp/x5h-gate.log || true
 
       - name: Stage debugging artifacts into one flat directory before upload
-        # The four source paths span three unrelated absolute-path roots
+        # The source paths below span three unrelated absolute-path roots
         # ($GITHUB_WORKSPACE, $RUNNER_TEMP, /tmp), so uploading them
         # directly would make upload-artifact@v4 compute a least-common-
         # ancestor of "/" and preserve each file's full absolute path
