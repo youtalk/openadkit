@@ -14,6 +14,13 @@ T=/var/lib/autosd-test
 mkdir -p /var/lib/containers
 
 echo GATE1_LOGIN_OK
+# Runtime assertion of the one-image invariant: build-bsp-kernel.sh already
+# asserts kernelrelease is exactly 6.1.102-autosd at BUILD time, but nothing
+# before this line proves the guest actually BOOTED that release. This is
+# the same kernel release the board will netboot -- the gate log recording
+# it here is what makes "the gate proved the board's kernel" a checkable
+# claim, not just an assumption carried over from the build step.
+echo "GATE1_KVER=$(uname -r)"
 echo "GATE1_SYSTEMD_STATE=$(systemctl is-system-running 2>/dev/null)"
 systemctl --failed --no-legend 2>/dev/null | head -20
 # The rebuilt kernel ships these as modules (=m, exactly as the BSP kernel
@@ -144,8 +151,18 @@ fi
 # selinux-bools.service FAILED on the BSP kernel (no SELinux — observed in
 # gate cycle 3, recorded as a survey answer). With SELinux present and
 # permissive it must now come up clean; systemctl is-failed exits 0 only
-# when the unit is in the failed state.
-if systemctl is-failed selinux-bools.service >/dev/null 2>&1; then
+# when the unit is in the failed state -- but it ALSO exits nonzero when
+# the unit does not exist at all, the same as when it is loaded and
+# healthy, so is-failed alone cannot tell "OK" from "dropped from the
+# image". GATE7_SELINUX_BOOLS_OK is a required marker, and a required
+# marker that can pass on a missing unit is a false-PASS shape. LoadState
+# disambiguates: it reads "not-found" for a unit systemd never heard of,
+# and something else (e.g. "loaded") for one it has -- so OK now requires
+# both "the unit exists" and "is-failed says it isn't failed".
+LOADSTATE="$(systemctl show -p LoadState --value selinux-bools.service 2>/dev/null)"
+if [ "$LOADSTATE" = "not-found" ]; then
+    echo "GATE7_SELINUX_BOOLS_ABSENT (LoadState=not-found -- unit missing from this image)"
+elif systemctl is-failed selinux-bools.service >/dev/null 2>&1; then
     echo GATE7_SELINUX_BOOLS_FAILED
     systemctl status selinux-bools.service --no-pager 2>&1 | head -10
 else

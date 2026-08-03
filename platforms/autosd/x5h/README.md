@@ -195,6 +195,7 @@ reused — GATE6 and GATE7 are new, not GATE5's successor under a new name.
 | Marker | Meaning | Required |
 | --- | --- | --- |
 | `GATE1_LOGIN_OK` | Guest login succeeded. | yes |
+| `GATE1_KVER=<release>` | `uname -r` inside the guest. The runtime assertion of the one-image invariant — `build-bsp-kernel.sh` asserts `kernelrelease` is exactly `6.1.102-autosd` at build time, but this is what proves the gate actually *booted* that release, the same one the board netboots. | yes, must equal `6.1.102-autosd` |
 | `GATE1_SYSTEMD_STATE=<state>` | `systemctl is-system-running` output, informational — no expected value is asserted here; unlike the retired edition, no CI or board run of this gate has recorded one yet. | no |
 | `GATE1_MODPROBE_FAIL` | `modprobe -a overlay veth bridge br_netfilter btrfs nf_tables` failed against the injected/staged module tree — a staging bug, not a kernel one (the rebuilt kernel ships these as modules, exactly as the BSP kernel does). | must be ABSENT |
 | `GATE2_STORE_FS=<fstype>` | Filesystem podman's store sat on for the GATE2 probe (expected `ext4`, since GATE2 mounts nothing). | yes, must equal `ext4` |
@@ -215,6 +216,7 @@ reused — GATE6 and GATE7 are new, not GATE5's successor under a new name.
 | `GATE7_SELINUX_ABSENT` | No `/sys/fs/selinux/enforce` at all — SELinux isn't compiled into this boot. | no |
 | `GATE7_SELINUX_BOOLS_OK` | `selinux-bools.service` did not fail. It failed under the BSP/retired-mimic kernel's absent SELinux (see the Troubleshooting row) — with SELinux present it must now come up clean. | yes |
 | `GATE7_SELINUX_BOOLS_FAILED` | `selinux-bools.service` failed even with SELinux present — a real regression, not the benign BSP-kernel failure the Troubleshooting row documents. | no |
+| `GATE7_SELINUX_BOOLS_ABSENT` | `selinux-bools.service`'s `LoadState` reads `not-found` — the unit is missing from this image entirely. Disambiguates from `GATE7_SELINUX_BOOLS_OK`: `systemctl is-failed` alone exits nonzero both for "healthy" and for "does not exist", so without this check a dropped unit could otherwise print `_OK`. | no |
 | `GATE_DONE` | `gate-guest.sh` reached the end of its run. | yes |
 
 `qemu-gate.exp` exits 0 only if every "Required: yes" marker above is present
