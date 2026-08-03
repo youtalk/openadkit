@@ -1,7 +1,7 @@
 name: autosd-x5h-rootfs
 on:
   push:
-    branches: [feat/autosd-x5h-rootfs]
+    branches: [feat/autosd-x5h-rootfs, feat/autosd-x5h-kernel]
   pull_request:
     paths:
       - platforms/autosd/x5h/**
@@ -25,7 +25,10 @@ concurrency:
   cancel-in-progress: true
 jobs:
   build-and-gate:
-    runs-on: ubicloud-standard-16-arm
+    # 30 vCPU: the from-source kernel build parallelizes near-linearly and
+    # is the longest new step; user-approved upgrade. If this label ever
+    # fails to resolve (cycle-1 check), fall back to ubicloud-standard-16-arm.
+    runs-on: ubicloud-standard-30-arm
     # Generous but bounded: the job is expected to run for hours (aib build,
     # a from-scratch kernel compile, docker build/skopeo for the test
     # images -- both native on this arm64 runner, not emulated, so cheaper
@@ -161,23 +164,26 @@ jobs:
           # --xattrs: plain `tar xf` silently drops extended attributes on
           # extract (exit 0, no warning) even when the archive carries
           # them, so security.capability on e.g. newuidmap/newgidmap/ping
-          # would otherwise vanish here. Safe specifically because this
-          # step runs on the CI host's ext4 (which has EXT4_FS_SECURITY),
-          # not the BSP-mimic target the gate boots -- GATE2 exists
-          # precisely because that restore fails on the constrained kernel.
+          # would otherwise vanish here. The flags matter for that same
+          # mechanical reason regardless of target: this step runs on the
+          # CI host's ext4, and the rebuilt kernel the gate now boots also
+          # has EXT4_FS_SECURITY=y, so GATE2 asserts the restored
+          # capability survives rather than that it fails on a constrained
+          # kernel.
           sudo tar --xattrs --xattrs-include='*.*' -xf aib/x5h-rootfs.tar -C "$mnt"
           sudo umount "$mnt"
           rmdir "$mnt"
 
-      - name: Build the mimic kernel (native aarch64)
-        # Consumes nothing the aib steps produce (Task 3's own source
-        # tree/config), so this runs even if aib failed above: it's the
-        # first time this kernel has ever compiled, and losing that signal
-        # to an unrelated aib failure is expensive on hours-per-iteration
-        # arm64 CI ahead of a one-shot board session.
+      - name: Build the BSP kernel (pinned source, native aarch64)
+        # Consumes nothing the aib steps produce, so this runs even if aib
+        # failed above -- losing the kernel-compile signal to an unrelated
+        # aib failure is expensive on hours-per-iteration arm64 CI ahead of
+        # a one-shot board session. First CI execution of the real
+        # renesas-rcar/linux-bsp tree: build errors surface HERE, not on
+        # the board.
         if: ${{ !cancelled() }}
         run: |
-          platforms/autosd/x5h/kernel/build-mimic-kernel.sh "$RUNNER_TEMP/mimic"
+          platforms/autosd/x5h/kernel/build-bsp-kernel.sh "$RUNNER_TEMP/bspkernel"
 
       - name: Build test images
         # Also aib-independent, and the first real execution of `docker
@@ -189,10 +195,10 @@ jobs:
           sudo systemctl start docker 2>/dev/null || true
           platforms/autosd/x5h/scripts/make-test-images.sh "$RUNNER_TEMP/testimages"
 
-      - name: Inject test payload into the ext4 export
+      - name: Inject test payload + rebuilt-kernel modules into the ext4 export
         run: |
           cd platforms/autosd/x5h
-          scripts/inject-test-images.sh aib/x5h-rootfs.ext4 "$RUNNER_TEMP/testimages"
+          scripts/inject-test-images.sh aib/x5h-rootfs.ext4 "$RUNNER_TEMP/testimages" "$RUNNER_TEMP/bspkernel"
 
       - name: Report disk headroom (before the QEMU gate)
         run: df -h /
@@ -201,8 +207,18 @@ jobs:
         run: |
           cd platforms/autosd/x5h
           [ -w /dev/kvm ] && echo "accel: KVM" || echo "accel: TCG (no /dev/kvm)"
+          # GATE6's outbound-SNAT probe target: in slirp, guest connections
+          # to 10.0.2.2:<port> arrive at the host's 127.0.0.1:<port>, so a
+          # container reaching this listener proves container -> podman0 ->
+          # masquerade -> guest eth0 end to end.
+          python3 -m http.server 8099 --bind 127.0.0.1 >/dev/null 2>&1 &
+          SNAT_PID=$!
+          rc=0
           sudo ./scripts/qemu-gate.exp ./scripts/run-qemu-gate.sh \
-            "$RUNNER_TEMP/mimic/Image" aib/x5h-rootfs.ext4 "$RUNNER_TEMP/blank.img" /tmp/x5h-gate.log
+            "$RUNNER_TEMP/bspkernel/Image-autosd" aib/x5h-rootfs.ext4 \
+            "$RUNNER_TEMP/blank.img" /tmp/x5h-gate.log || rc=$?
+          kill "$SNAT_PID" 2>/dev/null || true
+          exit "$rc"
 
       - name: Show gate markers
         # Its own step under always(): under bash -e a nonzero qemu-gate.exp
@@ -225,7 +241,11 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/x5h-bundle"
           cp -f platforms/autosd/x5h/aib/x5h-rootfs.tar "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
-          cp -f "$RUNNER_TEMP/mimic/Image" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/Image-autosd" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/r8a78000-ironhide-uio-autosd.dtb" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel"/modules-*.tar "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/kernelrelease.txt" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/config-autosd.txt" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           cp -rf "$RUNNER_TEMP/testimages" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           cp -f /tmp/x5h-gate.log "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           ls -lhR "$RUNNER_TEMP/x5h-bundle" || true
