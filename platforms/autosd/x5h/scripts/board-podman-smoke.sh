@@ -61,7 +61,12 @@ ext4loop)
         || { echo "SMOKE_${MODE}_MOUNT_FAIL"; exit 1; }
     STOREFS="$(findmnt -no FSTYPE --target /var/lib/containers | tail -1)"
     echo "SMOKE_${MODE}_STORE_FS=$STOREFS"
-    [ "$STOREFS" = "ext4" ] || { echo "SMOKE_${MODE}_STORE_FS_FAIL"; exit 1; }
+    # Unmount before exiting even on this early-exit path: no podman
+    # container has run yet at this point, so there is no async-teardown
+    # race to retry against, but a wrong-fstype loop mount left over
+    # /var/lib/containers here would otherwise be this script's only exit
+    # path with no cleanup attempt at all.
+    [ "$STOREFS" = "ext4" ] || { echo "SMOKE_${MODE}_STORE_FS_FAIL"; umount /var/lib/containers 2>/dev/null; exit 1; }
     ;;
 btrfs)
     if [ ! -f "$TMPFS_STAMP" ]; then
@@ -287,9 +292,14 @@ fi
 # returns before conmon/crun finish releasing the store), so it gets the
 # same retry loop -- and a leaked loop mount over the ext4-on-tmpfs image is
 # worse to leave behind than a leaked tmpfs mount, since it also pins the
-# backing file. Only tmpfs writes the interlock stamp (below); ext4loop
-# never gates btrfs and never withholds anything, so a failed unmount here
-# is reported and left for the operator, not treated as a stamp condition.
+# backing file's tmpfs memory even after the file itself is unlinked. tmpfs
+# above only withholds its interlock stamp on a failed unmount; ext4loop has
+# no stamp to withhold, so its failed-unmount case instead sets FAIL
+# directly -- the run terminates as SMOKE_ext4loop_FAIL, not a bare WARN
+# that still reaches PASS. rm -f runs ONLY after a confirmed clean unmount:
+# deleting the backing file while the loop device may still be attached
+# would drop the file's directory entry (hiding the leak from a later
+# `ls /run`) while the mount and its tmpfs memory stay live underneath.
 if [ "$MODE" = "ext4loop" ]; then
     EXT4LOOP_UMOUNT_OK=
     i=0
@@ -304,8 +314,10 @@ if [ "$MODE" = "ext4loop" ]; then
     if [ -z "$EXT4LOOP_UMOUNT_OK" ]; then
         umount /var/lib/containers
         echo "SMOKE_${MODE}_UMOUNT_WARN (stale loop mount may remain over the ext4 root)"
+        FAIL=1
+    else
+        rm -f /run/x5h-ext4-store.img
     fi
-    rm -f /run/x5h-ext4-store.img
 fi
 
 if [ -n "$FAIL" ]; then
