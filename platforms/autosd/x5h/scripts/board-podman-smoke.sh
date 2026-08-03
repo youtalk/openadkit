@@ -90,8 +90,14 @@ btrfs)
     # filesystem (e.g. the BSP's own storage) must not silently let the
     # next podman load write to it -- directly against the plan's
     # invariant that the only storage written is the previously-empty
-    # 32 GB UFS LUN.
-    [ "$STOREFS" = "btrfs" ] || { echo "SMOKE_${MODE}_STORE_FS_FAIL"; exit 1; }
+    # 32 GB UFS LUN. Also unmount before exiting here, same as the
+    # ext4loop arm's equivalent guard: no podman container has run yet at
+    # this point, so there is no async-teardown race to retry against, but
+    # a wrong-fstype mount left live over /var/lib/containers would
+    # otherwise be this arm's only exit path with no cleanup attempt at
+    # all -- and this is the arm that touches the real 32 GB UFS LUN, so
+    # leaving it mounted is worse here than anywhere else in this script.
+    [ "$STOREFS" = "btrfs" ] || { echo "SMOKE_${MODE}_STORE_FS_FAIL"; umount /var/lib/containers 2>/dev/null; exit 1; }
     ;;
 *)
     echo "usage: $0 tmpfs | ext4loop | btrfs <blockdev>"; exit 2

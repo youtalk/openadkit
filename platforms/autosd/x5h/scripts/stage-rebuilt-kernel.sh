@@ -13,12 +13,20 @@ DEST="$1"; BUNDLE="$2"; TFTP="$3"
     || { echo "FATAL: $DEST has no .x5h-stage-complete stamp (run stage-nfs-rootfs.sh first)"; exit 1; }
 KVER="$(cat "$BUNDLE/kernelrelease.txt")"
 [ -f "$BUNDLE/Image-autosd" ] || { echo "FATAL: $BUNDLE/Image-autosd not found"; exit 1; }
+[ -f "$BUNDLE/r8a78000-ironhide-uio-autosd.dtb" ] \
+    || { echo "FATAL: $BUNDLE/r8a78000-ironhide-uio-autosd.dtb not found"; exit 1; }
 [ -f "$BUNDLE/modules-$KVER.tar" ] || { echo "FATAL: $BUNDLE/modules-$KVER.tar not found"; exit 1; }
-tar -xf "$BUNDLE/modules-$KVER.tar" -C "$DEST"
+# tar/depmod below used to rely on bare `set -e` with no labelled diagnostic,
+# unlike every other step in this file -- an operator mid-session reading a
+# bare "tar: ..." or silent depmod exit deserves the same FATAL: triage cue
+# the guards around them already give.
+tar -xf "$BUNDLE/modules-$KVER.tar" -C "$DEST" \
+    || { echo "FATAL: extracting $BUNDLE/modules-$KVER.tar into $DEST failed"; exit 1; }
 [ -d "$DEST/lib/modules/$KVER" ] \
     || { echo "FATAL: module tree not at $DEST/lib/modules/$KVER after extract"; exit 1; }
 # depmod is arch-independent; the x86 NFS host can index aarch64 modules.
-depmod -b "$DEST" "$KVER"
+depmod -b "$DEST" "$KVER" \
+    || { echo "FATAL: depmod -b $DEST $KVER failed"; exit 1; }
 [ -f "$DEST/lib/modules/$KVER/modules.dep" ] \
     || { echo "FATAL: depmod produced no modules.dep"; exit 1; }
 # This drop-in is additive at the filename level but NOT neutral across
@@ -30,6 +38,17 @@ depmod -b "$DEST" "$KVER"
 # instruction below, which spells out the extra step.
 install -D -m 0644 "$HERE/../config/60-nftables.conf" \
     "$DEST/etc/containers/containers.conf.d/60-nftables.conf"
+# Refresh the test payload alongside the module tree. stage-nfs-rootfs.sh
+# only ever copies board-podman-smoke.sh once, at initial staging, and
+# refuses to re-run over an already-staged root -- so a board session that
+# reuses a root staged before this branch would otherwise run the OLD
+# script (no ext4loop mode, no rebuilt-kernel detection, no decisive
+# published-port verdict, no SNAT probe) and silently prove far less than
+# it looks like it does. Safe to overwrite unconditionally: the new script
+# detects BSP vs rebuilt via `uname -r`, so its BSP-kernel behaviour is
+# unchanged and a rollback boot still runs it correctly.
+install -m 0755 "$HERE/board-podman-smoke.sh" \
+    "$DEST/var/lib/autosd-test/board-podman-smoke.sh"
 install -m 0644 "$BUNDLE/Image-autosd" "$TFTP/Image-autosd"
 install -m 0644 "$BUNDLE/r8a78000-ironhide-uio-autosd.dtb" "$TFTP/r8a78000-ironhide-uio-autosd.dtb"
 echo "OK: $KVER staged into $DEST and $TFTP"

@@ -233,10 +233,18 @@ scripts/stage-rebuilt-kernel.sh <staged-nfs-root> <kernel-bundle-dir> <tftp-dir>
 
 This installs `Image-autosd` and `r8a78000-ironhide-uio-autosd.dtb` into
 `<tftp-dir>`, extracts and `depmod`s the module tree into `<staged-nfs-root>`,
-and stages `config/60-nftables.conf` into
-`<staged-nfs-root>/etc/containers/containers.conf.d/` — after this, both
-kernels boot the same NFS root (Board bring-up, step 2, is the U-Boot side
-of the selection).
+stages `config/60-nftables.conf` into
+`<staged-nfs-root>/etc/containers/containers.conf.d/`, and refreshes
+`<staged-nfs-root>/var/lib/autosd-test/board-podman-smoke.sh` from this
+branch's copy — after this, both kernels boot the same NFS root (Board
+bring-up, step 2, is the U-Boot side of the selection). The refresh matters
+because `stage-nfs-rootfs.sh` (Board bring-up, step 1) only ever copies
+`board-podman-smoke.sh` once, at initial staging, and refuses to re-run over
+an already-staged root — a board session reusing a root staged before this
+branch would otherwise run the old script (no `ext4loop` mode, no
+rebuilt-kernel detection) and silently prove far less than it looks like it
+does. Safe to overwrite: the refreshed script auto-detects BSP vs. rebuilt
+via `uname -r`, so its behaviour on a rollback boot is unchanged.
 
 Kernel selection is three U-Boot variables (`uboot/autosd-boot.env`'s header
 carries the full BSP/rebuilt value table); the script prints the exact
