@@ -21,6 +21,16 @@ echo GATE1_LOGIN_OK
 # it here is what makes "the gate proved the board's kernel" a checkable
 # claim, not just an assumption carried over from the build step.
 echo "GATE1_KVER=$(uname -r)"
+# Toolchain-pin runtime assertion. The wedge that motivated the pin is
+# invisible to this gate (no real silicon), so the one thing CI can prove
+# is that the booted kernel WAS built by the pinned compiler -- a silently
+# un-pinned build becomes a red gate here, not a board hang later.
+CCVER="$(cat /proc/version)"
+echo "GATE1_CCVER=$CCVER"
+case "$CCVER" in
+    *"Arm GNU Toolchain 13.2.rel1"*) echo GATE1_CCVER_OK ;;
+    *) echo GATE1_CCVER_FAIL ;;
+esac
 echo "GATE1_SYSTEMD_STATE=$(systemctl is-system-running 2>/dev/null)"
 systemctl --failed --no-legend 2>/dev/null | head -20
 # The rebuilt kernel ships these as modules (=m, exactly as the BSP kernel
