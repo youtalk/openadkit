@@ -123,13 +123,14 @@ int main(int argc, char **argv)
 		case 'n': count = atoi(optarg); break;
 		case 't': timeout_s = atoi(optarg); break;
 		default:
+			printf("RPMSG_PING_FAIL reason=bad_args\n");
 			fprintf(stderr,
 				"usage: %s -s <service> [-n count] [-t timeout_s]\n",
 				argv[0]);
 			return 1;
 		}
 	}
-	if (!service || count < 1) {
+	if (!service || count < 1 || timeout_s < 1 || timeout_s > 2147483) {
 		printf("RPMSG_PING_FAIL reason=bad_args\n");
 		return 1;
 	}
@@ -180,10 +181,21 @@ int main(int argc, char **argv)
 			printf("RPMSG_PING_FAIL reason=rx_timeout seq=%d\n", i);
 			goto fail;
 		}
+		if (pfd.revents & (POLLERR | POLLHUP)) {
+			printf("RPMSG_PING_FAIL reason=channel_closed seq=%d revents=0x%x\n",
+			       i, pfd.revents);
+			goto fail;
+		}
 		memset(rx, 0, sizeof(rx));
-		if (read(ept, rx, sizeof(rx)) < n + 1 || memcmp(tx, rx, (size_t)n + 1)) {
-			printf("RPMSG_PING_FAIL reason=payload_mismatch seq=%d rx='%s'\n",
-			       i, rx);
+		ssize_t r = read(ept, rx, sizeof(rx));
+		if (r < 0) {
+			printf("RPMSG_PING_FAIL reason=read seq=%d errno=%d\n",
+			       i, errno);
+			goto fail;
+		}
+		if (r < n + 1 || memcmp(tx, rx, (size_t)n + 1)) {
+			printf("RPMSG_PING_FAIL reason=payload_mismatch seq=%d len=%zd rx='%.*s'\n",
+			       i, r, (int)r, rx);
 			goto fail;
 		}
 	}
