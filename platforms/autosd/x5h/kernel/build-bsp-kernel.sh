@@ -20,7 +20,12 @@
 #   --firmware <dir>  full build, board image embedding rcar_gen5_mp_phy.bin
 #                     from <dir> (REQUIRED for TSN netboot; NDA SDK blob --
 #                     local builds only, never CI)
-#   --config-only     config merge + asserts only; no compiler needed
+#   --config-only     config merge + asserts only, no compile -- but the
+#                     pinned toolchain is still fetched first (Kconfig
+#                     evaluates $(CC) even for config targets, and the
+#                     emitted config's CONFIG_CC_VERSION_TEXT must name the
+#                     compiler that will build the Image), so this mode also
+#                     needs an x86_64 host
 #   --toolchain-only  fetch/verify/assert the toolchain, then exit
 # Usage: build-bsp-kernel.sh [--config-only|--toolchain-only] [--firmware <dir>] <outdir>
 # Produces in <outdir>: Image-autosd, r8a78000-ironhide-uio-autosd.dtb,
@@ -86,6 +91,19 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 export KBUILD_BUILD_TIMESTAMP="2026-04-23T08:07:21Z"
 export KBUILD_BUILD_USER=openadkit
 export KBUILD_BUILD_HOST=x5h
+# Fetch and verify the toolchain BEFORE any `make` target runs -- config
+# targets included. Linux 6.1's scripts/Kconfig.include:39 is
+# `$(error-if,$(failure,command -v $(CC)),C compiler '$(CC)' not found)`,
+# and CROSS_COMPILE points at an absolute path inside the EXTRACTED
+# toolchain tree, so `olddefconfig` and `make -s kernelrelease` both die
+# without it. CI caches only the .tar.xz, never the extracted tree, so a
+# later call would be too late: every fresh runner would fail in the config
+# step. Running it here also means config-autosd.txt's
+# CONFIG_CC_VERSION_TEXT genuinely describes the compiler that builds the
+# Image, in --config-only runs too. Do NOT "fix" a missing compiler by
+# installing a distro cross-gcc instead: that would make the emitted config
+# compiler-dependent, which is exactly what the pin exists to prevent.
+fetch_toolchain
 # Pinned commit of renesas-rcar/linux-bsp branch v6.1.102/rcar-6.0.0.rc12
 # (carries r8a78000/Ironhide: the X5H). The ref is a mutable BRANCH — never
 # build from the branch name. Move this SHA only deliberately, and re-run
@@ -156,7 +174,6 @@ if [ -n "$CONFIG_ONLY" ]; then
   echo "OK (config-only): $KVER"
   exit 0
 fi
-fetch_toolchain
 make -j"$(nproc)" Image dtbs modules
 cp arch/arm64/boot/Image "$OUT/Image-autosd"
 cp arch/arm64/boot/dts/renesas/r8a78000-ironhide-uio.dtb "$OUT/r8a78000-ironhide-uio-autosd.dtb"
