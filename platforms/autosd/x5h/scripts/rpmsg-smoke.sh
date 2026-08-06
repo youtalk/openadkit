@@ -28,6 +28,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# Reject non-numeric/zero -c or -n now: an unvalidated CYCLES/MSGS falls
+# straight through the cycle loop below and prints RPMSG_SMOKE_PASS without
+# running anything. This is a pure argument-validation failure, so it is
+# checked before the hardware probe below and fires the same way regardless
+# of board state.
+case "$CYCLES" in
+    ''|*[!0-9]*|0) echo "RPMSG_SMOKE_FAIL cycle=0 reason=bad_cycles"; exit 1 ;;
+esac
+case "$MSGS" in
+    ''|*[!0-9]*|0) echo "RPMSG_SMOKE_FAIL cycle=0 reason=bad_msgs"; exit 1 ;;
+esac
+
 # rpmsg-ping next to this script wins; else rely on PATH.
 HERE=$(dirname "$0")
 PING="$HERE/rpmsg-ping"
@@ -93,7 +105,14 @@ while [ "$i" -le "$CYCLES" ]; do
             exit 1
         }
     fi
-    echo "$FW" > "$RPROC/firmware"
+    echo "$FW" > "$RPROC/firmware" || {
+        echo "RPMSG_SMOKE_FAIL cycle=$i reason=firmware_write_error"
+        exit 1
+    }
+    [ "$(cat "$RPROC/firmware")" = "$FW" ] || {
+        echo "RPMSG_SMOKE_FAIL cycle=$i reason=firmware_readback_mismatch"
+        exit 1
+    }
     echo start > "$RPROC/state" || {
         echo "RPMSG_SMOKE_FAIL cycle=$i reason=start_write_error"
         exit 1
