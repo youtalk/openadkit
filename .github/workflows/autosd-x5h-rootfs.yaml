@@ -138,14 +138,21 @@ jobs:
         # covering an image that ships neither.
         run: |
           sudo apt-get update
-          # skopeo/qemu/expect are unconditional; podman and crun are added
-          # only if nothing already provides them. command -v returns nonzero
-          # on a miss, which under bash -e would abort the step, so the miss
-          # is what appends to the list rather than what fails.
+          # skopeo/qemu/expect are unconditional. podman and crun are added
+          # only when nothing already provides podman, and they are added as
+          # a PAIR -- never one half. Testing the two independently is what
+          # opens the hole: an image shipping podman 5.x in /usr/local/bin
+          # but no crun would make apt drop crun 1.14.1 into /usr/bin, i.e.
+          # introduce the mismatched half of a pair whose other half is
+          # already fixed. command -v returns nonzero on a miss, which under
+          # bash -e would abort the step, so the miss is what selects the
+          # branch rather than what fails.
           PKGS=(skopeo qemu-system-arm qemu-utils expect)
-          for p in podman crun; do
-            command -v "$p" >/dev/null 2>&1 || PKGS+=("$p")
-          done
+          if command -v podman >/dev/null 2>&1; then
+            echo "podman already provided by the image; not adding podman/crun from apt"
+          else
+            PKGS+=(podman crun)
+          fi
           echo "apt packages to install: ${PKGS[*]}"
           sudo apt-get install -y "${PKGS[@]}"
 
@@ -160,23 +167,42 @@ jobs:
           # without clobbering unrelated settings the image may depend on;
           # the filename must end in .conf. The mechanism is confirmed --
           # the post-reset probe below reported exactly the path this file
-          # named -- so only the VALUE changes here. The path is now resolved
-          # with `command -v crun`, i.e. the first crun on PATH, the same way
-          # the shell resolves podman itself, so the pin always names the
-          # half of the pair that matches the podman that will actually run.
-          # PATH order and sudo's secure_path agree here: both put
-          # /usr/local/bin ahead of /usr/bin.
-          CRUN_BIN="$(command -v crun 2>/dev/null || true)"
+          # named -- so only the VALUE changes here.
+          #
+          # crun is resolved as a SIBLING of the podman that will actually
+          # run, under the SAME lookup that will run it. Pairing is a
+          # co-installation property, not a PATH property, and the two halves
+          # used to be resolved by two different resolvers: crun through the
+          # unprivileged runner user's PATH at pin time, podman through
+          # sudo's secure_path at use time (every podman call that matters
+          # here is `sudo podman`, or aib under sudo). Those agree on image
+          # 2.336.0, but that is a property of that image, not of the
+          # mechanism. When the resolved podman has no sibling crun there is
+          # deliberately NO fallback to some other crun on PATH: marrying
+          # podman 5.x to an apt crun 1.14.1 is exactly how "OCI runtime
+          # error: crun: unknown version specified", exit 126, was produced
+          # once already. No pin is strictly better than a wrong pin, because
+          # podman then runs its own default-runtime search.
+          PODMAN_BIN="$(sudo sh -c 'command -v podman' 2>/dev/null || true)"
+          CRUN_BIN=
+          if [ -n "$PODMAN_BIN" ] && [ -x "$(dirname "$PODMAN_BIN")/crun" ]; then
+            CRUN_BIN="$(dirname "$PODMAN_BIN")/crun"
+          fi
+          # Printed as a pair so the pairing DECISION is in the log, rather
+          # than being inferred from the type -a dump below.
+          echo "resolved podman (sudo secure_path): ${PODMAN_BIN:-<none>}"
+          echo "paired crun (sibling of that podman): ${CRUN_BIN:-<none>}"
           if [ -n "$CRUN_BIN" ]; then
             sudo install -d -m 0755 /etc/containers/containers.conf.d
             printf '[engine]\nruntime = "crun"\n\n[engine.runtimes]\ncrun = ["%s"]\n' "$CRUN_BIN" \
               | sudo tee /etc/containers/containers.conf.d/10-openadkit-crun.conf
           else
-            # No crun anywhere: writing a drop-in pointing at a path that
-            # does not exist would be strictly worse than not pinning at
-            # all, so remove any stale drop-in and let podman pick its own
-            # runtime. Say so loudly -- this is not an expected state.
-            echo "WARNING: no crun found on PATH; not pinning podman's OCI runtime" >&2
+            # No crun beside the podman that will run: writing a drop-in that
+            # points anywhere else -- or at a path that does not exist -- is
+            # strictly worse than not pinning at all, so remove any stale
+            # drop-in and let podman pick its own runtime. Say so loudly:
+            # this is not an expected state.
+            echo "WARNING: no crun beside ${PODMAN_BIN:-podman}; not pinning podman's OCI runtime" >&2
             sudo rm -f /etc/containers/containers.conf.d/10-openadkit-crun.conf
           fi
 
