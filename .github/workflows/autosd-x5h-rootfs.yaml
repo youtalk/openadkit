@@ -24,21 +24,72 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 jobs:
+  build-kernel:
+    # x86_64 on purpose: the kernel is cross-compiled with the pinned ARM
+    # GNU 13.2.Rel1 x86_64-hosted toolchain -- the exact binary that
+    # avoided the board's layout-sensitive SMP wedge 3/3 while GCC 13.3
+    # triggered it 3/3 (2026-08-05 board session; see the build script
+    # header). ARM ships no aarch64-hosted 13.2.Rel1, so this job cannot
+    # run on the arm64 runner. Running it first also makes a kernel build
+    # error fail the workflow before the multi-hour arm64 job spends
+    # anything.
+    runs-on: ubicloud-standard-16
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kernel build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison libssl-dev libelf-dev bc xz-utils
+
+      - name: Cache the pinned cross-toolchain tarball
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/x5h-toolchain/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+          key: arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-linux-gnu-12fcdf13
+
+      - name: Build the BSP kernel (pinned source, pinned ARM GNU 13.2.Rel1 cross)
+        run: |
+          platforms/autosd/x5h/kernel/build-bsp-kernel.sh "$RUNNER_TEMP/bspkernel"
+
+      - name: Upload the kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: x5h-kernel
+          path: |
+            ${{ runner.temp }}/bspkernel/Image-autosd
+            ${{ runner.temp }}/bspkernel/r8a78000-ironhide-uio-autosd.dtb
+            ${{ runner.temp }}/bspkernel/modules-6.1.102-autosd.tar
+            ${{ runner.temp }}/bspkernel/kernelrelease.txt
+            ${{ runner.temp }}/bspkernel/config-autosd.txt
+            ${{ runner.temp }}/bspkernel/provenance.txt
+            ${{ runner.temp }}/bspkernel/extract-ikconfig
+          retention-days: 14
+          if-no-files-found: error
+
   build-and-gate:
-    # 30 vCPU: the from-source kernel build parallelizes near-linearly and
-    # is the longest new step; user-approved upgrade. If this label ever
+    # Serial by necessity: this job consumes the kernel artifact at the
+    # inject step, and GitHub Actions cannot wait mid-job for another
+    # job's artifact. The x64 cross build it waits for replaces the
+    # kernel compile that used to run natively inside this job, so
+    # wall-clock is roughly neutral -- and a kernel build error now
+    # fails before the multi-hour aib build starts.
+    needs: build-kernel
+    # 30 vCPU (user-approved): kept after the kernel compile moved out to
+    # the x64 build-kernel job -- the aib build, the native container
+    # builds and the TCG QEMU gate still run here. If this label ever
     # fails to resolve (cycle-1 check), fall back to ubicloud-standard-16-arm.
     runs-on: ubicloud-standard-30-arm
     # Generous but bounded: the job is expected to run for hours (aib build,
-    # a from-scratch kernel compile, docker build/skopeo for the test
-    # images -- both native on this arm64 runner, not emulated, so cheaper
-    # than the platform-generic worst case -- and a TCG QEMU boot, whose
-    # gate alone budgets up to 1800s to a login prompt plus a 900s
-    # inactivity window per marker). 240 stays well below the 360-minute
-    # platform default while giving that worst case real headroom, so a
-    # genuinely stuck step (a hung prompt, a runaway retry loop) fails
-    # within a single working session instead of the ceiling itself
-    # wasting the whole cycle with no diagnostic.
+    # docker build/skopeo for the test images -- native on this arm64
+    # runner, not emulated, so cheaper than the platform-generic worst
+    # case -- and a TCG QEMU boot, whose gate alone budgets up to 1800s
+    # to a login prompt plus a 900s inactivity window per marker). 240
+    # stays well below the 360-minute platform default while giving that
+    # worst case real headroom, so a genuinely stuck step (a hung prompt,
+    # a runaway retry loop) fails within a single working session instead
+    # of the ceiling itself wasting the whole cycle with no diagnostic.
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
@@ -49,8 +100,7 @@ jobs:
       - name: Install host tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman skopeo qemu-system-arm qemu-utils expect \
-            flex bison libssl-dev libelf-dev bc
+          sudo apt-get install -y podman skopeo qemu-system-arm qemu-utils expect
 
       - name: Put container storage on a non-overlay location (aib CI pattern)
         run: |
@@ -174,22 +224,20 @@ jobs:
           sudo umount "$mnt"
           rmdir "$mnt"
 
-      - name: Build the BSP kernel (pinned source, native aarch64)
-        # Consumes nothing the aib steps produce, so this runs even if aib
-        # failed above -- losing the kernel-compile signal to an unrelated
-        # aib failure is expensive on hours-per-iteration arm64 CI ahead of
-        # a one-shot board session. First CI execution of the real
-        # renesas-rcar/linux-bsp tree: build errors surface HERE, not on
-        # the board.
-        if: ${{ !cancelled() }}
-        run: |
-          platforms/autosd/x5h/kernel/build-bsp-kernel.sh "$RUNNER_TEMP/bspkernel"
+      - name: Download the pinned-toolchain kernel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: x5h-kernel
+          path: ${{ runner.temp }}/bspkernel
 
       - name: Build test images
-        # Also aib-independent, and the first real execution of `docker
-        # build` on a runner with working networking (this sandbox has
-        # net.ipv4.ip_forward=0, so it was previously only proven via a
-        # non-committed --network host copy) -- same reasoning as above.
+        # The first real execution of `docker build` on a runner with
+        # working networking (this sandbox has net.ipv4.ip_forward=0, so it
+        # was previously only proven via a non-committed --network host
+        # copy). Consumes nothing the aib steps produce, so it runs even if
+        # aib failed above: losing this signal to an unrelated aib failure
+        # is expensive on hours-per-iteration arm64 CI ahead of a one-shot
+        # board session.
         if: ${{ !cancelled() }}
         run: |
           sudo systemctl start docker 2>/dev/null || true
@@ -246,6 +294,8 @@ jobs:
           cp -f "$RUNNER_TEMP/bspkernel"/modules-*.tar "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           cp -f "$RUNNER_TEMP/bspkernel/kernelrelease.txt" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           cp -f "$RUNNER_TEMP/bspkernel/config-autosd.txt" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/provenance.txt" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/extract-ikconfig" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           cp -rf "$RUNNER_TEMP/testimages" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           cp -f /tmp/x5h-gate.log "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           ls -lhR "$RUNNER_TEMP/x5h-bundle" || true
