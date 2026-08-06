@@ -268,12 +268,29 @@ jobs:
         # earliest reading that reflects the state every aib step below runs
         # in. It is the reading that answers "did the crun pin take?" -- and
         # it costs seconds here versus an hour-plus to reach the same question
-        # via a build-builder failure. Non-fatal on purpose (|| true): a
-        # diagnostic must never become a new failure mode, and the aib steps
-        # below remain the real gate.
+        # via a build-builder failure.
         run: |
+          # Two questions, graded differently on purpose.
+          #
+          # LIVENESS -- "can podman start at all, post-reset?" -- is FATAL.
+          # A probe that ends in `|| true` answers nothing, and the hour this
+          # step exists to save is then still spent inside build-builder on
+          # exactly the drift the step was added to catch. This runs AFTER
+          # the storage reset that clears the stale /dev/shm/libpod_lock,
+          # which is the sole reason the earlier copy of this probe is
+          # expected to fail, so there is no known-good state in which this
+          # assertion fires -- and if it does, every aib step below was going
+          # to fail anyway, an hour later and less legibly.
+          sudo podman info >/dev/null 2>&1 \
+            || { echo "FATAL: podman cannot start after the storage reset"; sudo podman info 2>&1 | tail -30; exit 1; }
+          # VALUE -- which runtime, from which path, at which version -- stays
+          # best-effort. podman is demonstrably alive by this line, so a
+          # failure here can only be a Go-template/field-name mismatch in a
+          # future podman, and a diagnostic must not become a new failure
+          # mode for that. The aib steps below remain the real gate on the
+          # value being the right one.
           sudo podman info --format 'OCIRuntime: {{.Host.OCIRuntime.Name}} {{.Host.OCIRuntime.Path}} {{.Host.OCIRuntime.Version}}' \
-            || sudo podman info 2>&1 | tail -30 || true
+            || echo "WARNING: podman is up but the OCIRuntime template did not render" >&2
 
       - name: Install automotive-image-builder runner
         run: |
