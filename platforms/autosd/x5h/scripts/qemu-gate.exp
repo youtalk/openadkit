@@ -138,4 +138,12 @@ foreach must {GATE1_LOGIN_OK GATE1_KVER=6.1.102-autosd GATE1_CCVER_OK GATE2_STOR
 if {[string match "*GATE1_MODPROBE_FAIL*" $log]} {
     puts "FOUND: GATE1_MODPROBE_FAIL (module tree staging broken)"; set fail 1
 }
+# The toolchain pin is a correctness condition, not a preference (see
+# kernel/build-bsp-kernel.sh's header): a kernel built by any other compiler
+# must not pass. GATE1_CCVER_OK's absence would already fail the run above,
+# but naming the cause explicitly is what the README documents as "must be
+# ABSENT", and it beats leaving the operator a bare MISSING line.
+if {[string match "*GATE1_CCVER_FAIL*" $log]} {
+    puts "FOUND: GATE1_CCVER_FAIL (booted kernel was not built by the pinned toolchain)"; set fail 1
+}
 exit $fail

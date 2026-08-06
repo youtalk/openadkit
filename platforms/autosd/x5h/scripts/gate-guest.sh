@@ -14,12 +14,14 @@ T=/var/lib/autosd-test
 mkdir -p /var/lib/containers
 
 echo GATE1_LOGIN_OK
-# Runtime assertion of the one-image invariant: build-bsp-kernel.sh already
-# asserts kernelrelease is exactly 6.1.102-autosd at BUILD time, but nothing
-# before this line proves the guest actually BOOTED that release. This is
-# the same kernel release the board will netboot -- the gate log recording
-# it here is what makes "the gate proved the board's kernel" a checkable
-# claim, not just an assumption carried over from the build step.
+# Runtime assertion of the kernelrelease half of the one-build-two-images
+# invariant (GATE1_CCVER below is the toolchain half): build-bsp-kernel.sh
+# already asserts kernelrelease is exactly 6.1.102-autosd at BUILD time, but
+# nothing before this line proves the guest actually BOOTED that release.
+# The board netboots the same release from the same build -- the gate log
+# recording it here is what makes "the gate proved the board's kernel
+# lineage" a checkable claim, not just an assumption carried over from the
+# build step.
 echo "GATE1_KVER=$(uname -r)"
 # Toolchain-pin runtime assertion. The wedge that motivated the pin is
 # invisible to this gate (no real silicon), so the one thing CI can prove

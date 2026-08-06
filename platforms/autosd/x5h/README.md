@@ -17,7 +17,10 @@ answered before board time.
 - `config/`: containers.conf drop-ins shipped into the image (base) or staged
   alongside the rebuilt kernel (`60-nftables.conf`)
 - `kernel/`: rebuilt-kernel config fragments + build script, shared by the
-  QEMU gate and the board — both boot the same `Image-autosd`
+  QEMU gate and the board — one build, two images: both boot an
+  `Image-autosd` from the same source SHA, toolchain and fragments, and the
+  only permitted config delta is the `CONFIG_EXTRA_FIRMWARE` pair (see "One
+  build, two images")
 - `scripts/`: QEMU gate harness and board staging/smoke scripts
 - `uboot/`: `bootcmd_autosd` template (site values are filled at session time, not committed)
 
@@ -51,7 +54,8 @@ tmpfs/btrfs at all.
 
 `qemu-gate.exp` exits 0 only once every required marker in the "Gate markers
 (rebuilt-kernel edition)" table below (in "Rebuilt kernel (6.1.102-autosd)")
-is present in the session log, and `GATE1_MODPROBE_FAIL` is absent from it.
+is present in the session log, and both `GATE1_MODPROBE_FAIL` and
+`GATE1_CCVER_FAIL` are absent from it.
 
 `qemu-gate.exp` waits for the guest-side run with an inactivity timeout (15
 minutes with no new `GATE<n>_…` marker line, re-armed on every marker) rather
@@ -185,6 +189,18 @@ declaration landed, that the built `kernelrelease` is exactly
 `6.1.102-autosd`, and that the compiler is exactly the pinned toolchain —
 each check failing is a FATAL build error, not a warning.
 
+The pinned toolchain is fetched and identity-asserted **before the first
+`make` target**, not just before the compile, so **every mode except
+`--toolchain-only` needs an x86_64 host — `--config-only` included**. That is
+not a convenience: Linux 6.1's `scripts/Kconfig.include` evaluates `$(CC)` and
+hard-errors when it is missing, so `olddefconfig` and `make -s kernelrelease`
+both need the cross compiler to exist. The upside is that
+`config-autosd.txt`'s `CONFIG_CC_VERSION_TEXT` genuinely names the compiler
+that builds the `Image` in every mode. Do not "fix" a missing compiler by
+installing a distro cross-gcc — that would make the emitted config depend on
+whatever compiler the host happens to have, which is exactly what the pin
+exists to prevent.
+
 **The compiler is pinned to ARM GNU 13.2.Rel1 (x86_64-hosted cross), on
 board evidence.** The 2026-08-05 debug session (18 boots, 14 binaries)
 root-caused a boot hang to a layout-sensitive platform bug: one random
@@ -219,7 +235,25 @@ not embed the firmware.
 
 Artifacts (also staged into the CI debugging bundle): `Image-autosd`,
 `r8a78000-ironhide-uio-autosd.dtb`, `modules-6.1.102-autosd.tar`,
-`kernelrelease.txt`, `config-autosd.txt`.
+`kernelrelease.txt`, `config-autosd.txt`, `provenance.txt` (toolchain
+identity line, the `CONFIG_EXTRA_FIRMWARE*` values, and the sha256 of the
+first three — this is what a reproducibility or "which image is this?" check
+reads), and `extract-ikconfig` (the pinned tree's own script, exported so a
+staging host can read an `Image`'s embedded config with no kernel checkout;
+`stage-rebuilt-kernel.sh` uses it to refuse firmware-less images).
+
+`modules-6.1.102-autosd.tar` deliberately carries **no** depmod-generated
+index files (`modules.dep`, `modules.dep.bin`, `modules.alias`,
+`modules.alias.bin`, `modules.symbols`, `modules.symbols.bin`,
+`modules.softdep`, `modules.devname`, `modules.builtin.bin`,
+`modules.builtin.alias.bin`): `modules_install` builds them with the
+*building* machine's `depmod`, so their bytes track the host's kmod version
+rather than the kernel and would defeat byte-identity across machines. Both
+consumers regenerate them with `depmod -b <root> 6.1.102-autosd` right after
+extracting, and both then assert `modules.dep` exists — anything else that
+extracts this tar must do the same, or `modprobe` in the target will fail.
+The build-generated `modules.order`, `modules.builtin` and
+`modules.builtin.modinfo` **are** included: `depmod` reads them.
 
 **The firmware split.** The board's own kernel bakes in three Renesas
 blobs; they ship only in the NDA R-Car xOS SDK, so no from-source CI build
@@ -279,13 +313,39 @@ reused — GATE6 and GATE7 are new, not GATE5's successor under a new name.
 
 `qemu-gate.exp` exits 0 only if every "Required: yes" marker above is present
 in the session log (with the fstype-qualified ones matching exactly, e.g.
-`GATE2_STORE_FS=ext4`) and `GATE1_MODPROBE_FAIL` is absent from it.
+`GATE2_STORE_FS=ext4`) and every "Required: must be ABSENT" marker
+(`GATE1_MODPROBE_FAIL`, `GATE1_CCVER_FAIL`) is absent from it.
 
 ### Board deployment
 
-After Board bring-up's step 1 (`stage-nfs-rootfs.sh`, below) has staged the
-NFS root, add the rebuilt kernel on top of it — strictly additive, no BSP
-file touched — as root on the NFS server host:
+Deployment is two steps: build the board's own kernel bundle, then stage it
+onto the NFS root and TFTP directory with
+`scripts/stage-rebuilt-kernel.sh <staged-nfs-root> <kernel-bundle-dir> <tftp-dir>`.
+
+`<kernel-bundle-dir>` must come from a **`--firmware` build**. The CI
+artifact is the firmware-less *gate* image and cannot NFS-netboot at all (see
+"The firmware split" above), so build the board bundle locally first, from a
+directory holding the SDK blob — never in CI, never committed:
+
+```
+kernel/build-bsp-kernel.sh --firmware <blob-dir> <kernel-bundle-dir>
+```
+
+That is enforced, not merely expected: `stage-rebuilt-kernel.sh`
+`extract-ikconfig`s the candidate `Image-autosd` and **FATALs before anything
+reaches TFTP** unless the embedded config carries
+`CONFIG_EXTRA_FIRMWARE="rcar_gen5_mp_phy.bin"`. Handing it the CI artifact —
+or a local build where `--firmware` was omitted or, just as easily, written
+*after* `<outdir>` — fails there and costs a full 30–60 minute rebuild mid
+session, so confirm the bundle's `provenance.txt` names the blob before
+starting. (A second, separate FATAL covers an `Image` from which no embedded
+config can be read at all — truncated or corrupt. That one is *not* the
+`--firmware` question and rebuilding with `--firmware` will not fix it.)
+
+With that bundle in hand, and after Board bring-up's step 1
+(`stage-nfs-rootfs.sh`, below) has staged the NFS root, add the rebuilt
+kernel on top of it — strictly additive, no BSP file touched — as root on the
+NFS server host:
 
 ```
 scripts/stage-rebuilt-kernel.sh <staged-nfs-root> <kernel-bundle-dir> <tftp-dir>
@@ -391,13 +451,14 @@ Host tools: `gh` (authenticated), `qemu-system-aarch64` and `qemu-img`
 what `run-qemu-gate.sh` shells out to when `/tmp/x5h-blank.img` doesn't
 already exist, so it's a runtime dependency of this replay, not a build-only
 one), `expect` (the `qemu-gate.exp` interpreter), and `e2fsprogs` for
-`mkfs.ext4`. CI's "Install host tools" step installs `podman`, `skopeo`,
-`qemu-system-arm`, `qemu-utils`, `expect`, `flex`, `bison`, `libssl-dev`,
-`libelf-dev`, and `bc` — `e2fsprogs` and `gh` are not in that list because
-GitHub-hosted runners ship both preinstalled already; the
-`flex`/`bison`/`libssl-dev`/`libelf-dev`/`bc` portion is the aib/kernel/
-container-build toolchain, needed only to produce the artifacts this replay
-downloads pre-built, not to boot them.
+`mkfs.ext4`. The arm64 `build-and-gate` job's "Install host tools" step
+installs exactly `podman`, `skopeo`, `qemu-system-arm`, `qemu-utils` and
+`expect` — nothing else, because the kernel compile no longer happens there:
+`flex`, `bison`, `libssl-dev`, `libelf-dev`, `bc` and `xz-utils` moved to the
+x64 `build-kernel` job along with it. `e2fsprogs` and `gh` are in neither list
+because the runners ship both preinstalled. None of the kernel-build packages
+are needed for this replay, which downloads the kernel pre-built rather than
+producing it.
 
 Everything through downloading and unpacking the artifact runs as your own
 user. Loop-mounting the ext4 export (step 3's `mount`/`tar`/`umount`) and
@@ -488,7 +549,8 @@ grep -E 'GATE[0-9_]+' /tmp/x5h-local-gate.log
 `qemu-gate.exp` itself exits 0 only once every required marker from the
 "Gate markers (rebuilt-kernel edition)" table (in "Rebuilt kernel
 (6.1.102-autosd)" above) is present in the log, and `GATE1_MODPROBE_FAIL`
-is absent — check `echo $?` after it returns, or just compare the `grep`
+and `GATE1_CCVER_FAIL` are both absent — check `echo $?` after it returns,
+or just compare the `grep`
 output above against that table for the expected line-for-line match.
 
 ## Board bring-up
