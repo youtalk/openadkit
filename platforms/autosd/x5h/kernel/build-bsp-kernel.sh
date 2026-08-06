@@ -143,6 +143,37 @@ if [ ! -d "$SRC" ]; then
   rm -f "$OUT/src.tar.gz"
 fi
 cd "$SRC"
+# Path-independent build-ids, so the reproducibility promise above holds
+# across build DIRECTORIES and not just across machines. The two embedded
+# vDSOs and every module are linked with --build-id=sha1, and a build-id
+# hashes the debug info, which records the absolute build directory in
+# DW_AT_comp_dir. Building the same source under two different absolute
+# paths therefore produced artifacts differing ONLY in those notes
+# (measured: 40 bytes in Image-autosd, exactly 20 -- one NT_GNU_BUILD_ID --
+# per .ko, 972/975 files in the tar); stripping removes the debug info but
+# keeps the note, so INSTALL_MOD_STRIP does not hide it.
+# Documentation/kbuild/reproducible-builds.rst prescribes exactly this map.
+# -fdebug-prefix-map, NOT -ffile-prefix-map: the latter also rewrites
+# __FILE__, changing .rodata contents and potentially shifting code layout
+# -- and this board's SMP wedge (see the header) is layout-sensitive, with
+# functionally identical kernels landing on opposite sides of it. Nothing
+# here may move code; -fdebug-prefix-map affects debug info only.
+#
+# BOTH KCFLAGS and KAFLAGS: the kernel's top-level Makefile feeds KCFLAGS
+# into KBUILD_CFLAGS and KAFLAGS into KBUILD_AFLAGS as two separate
+# variables, so KCFLAGS alone leaves every .S-built object untouched.
+# Measured, not assumed: KCFLAGS alone took the module tar from 972 of 975
+# files differing down to 8, and all 8 survivors were arch/arm64/crypto
+# modules whose C halves matched byte for byte while their .S halves did
+# not (sha3-ce-glue.o same, sha3-ce-core.o differing) -- with the Image
+# still differing in the two vDSOs, which are likewise part C part .S. gcc
+# forwards -fdebug-prefix-map to gas as --debug-prefix-map for .S input,
+# so the assembler's DWARF directory is remapped the same way; confirmed
+# against the pinned 13.2.Rel1 binutils in isolation. Appended to any
+# caller-supplied value rather than replacing it.
+DEBUG_PREFIX_MAP="-fdebug-prefix-map=$SRC=/x5h/linux-bsp"
+export KCFLAGS="${KCFLAGS:+$KCFLAGS }$DEBUG_PREFIX_MAP"
+export KAFLAGS="${KAFLAGS:+$KAFLAGS }$DEBUG_PREFIX_MAP"
 if [ -n "$FWDIR" ]; then
   [ -f "$FWDIR/rcar_gen5_mp_phy.bin" ] \
     || { echo "FATAL: $FWDIR/rcar_gen5_mp_phy.bin not found (--firmware dir must hold the SDK blob)"; exit 1; }
