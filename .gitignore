@@ -48,3 +48,10 @@ capture/
 # is an X5H/R-Car subsystem name so it may hold NDA material -- never opened,
 # never staged, ignored on the same reflexive-`git add -A` grounds as above.
 /home-test-youtalk-autoware-safety-island.zip
+
+# Superpowers SDD working artifacts: specs, plans, review reports, progress
+# ledgers and range diffs. Project convention keeps these OUT of the target
+# repo -- they belong under ~/src/claude-superpowers -- so this is the same
+# reflexive-`git add -A` guard as the directories above, not an NDA one.
+# Nothing under here has ever been tracked.
+/.superpowers/
