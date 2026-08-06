@@ -119,9 +119,63 @@ jobs:
         run: df -h /
 
       - name: Install host tools
+        # crun is installed EXPLICITLY alongside podman so both halves of the
+        # container stack come from the same Ubuntu archive and are
+        # version-matched. The Ubicloud arm64 runner image (2.336.0,
+        # 2026-08-06) ships its own podman stack outside dpkg -- its systemd
+        # units live in /usr/local/lib/systemd/system -- and apt installing
+        # only podman (4.9.3+ds1-1ubuntu0.2), conmon and catatonit left that
+        # new podman paired with the image's older crun, which then rejected
+        # the ociVersion podman writes into config.json: "OCI runtime error:
+        # crun: unknown version specified". Naming crun here makes the pair a
+        # single apt transaction instead of two stacks mixed by accident.
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman skopeo qemu-system-arm qemu-utils expect
+          sudo apt-get install -y podman crun skopeo qemu-system-arm qemu-utils expect
+
+          # Then make podman's runtime choice explicit rather than leaving it
+          # to a binary search the image can win. This is a DROP-IN, not an
+          # edit of containers.conf: podman 4.9 reads
+          # /usr/share/containers/containers.conf, then
+          # /etc/containers/containers.conf, then
+          # /etc/containers/containers.conf.d/*.conf in alphanumeric order,
+          # with later files overriding earlier ones (containers.conf(5),
+          # checked against podman 4.9.3). The drop-in therefore wins over
+          # whatever either full config says, without clobbering unrelated
+          # settings the image may depend on. The filename must end in .conf.
+          # The path comes from the crun package's own dpkg manifest, so it
+          # names the binary apt just installed rather than whatever `crun`
+          # happens to resolve to on PATH.
+          CRUN_BIN="$(dpkg -L crun 2>/dev/null | grep -m1 -E '^/usr/(local/)?s?bin/crun$' || true)"
+          [ -n "$CRUN_BIN" ] || CRUN_BIN=/usr/bin/crun
+          sudo install -d -m 0755 /etc/containers/containers.conf.d
+          printf '[engine]\nruntime = "crun"\n\n[engine.runtimes]\ncrun = ["%s"]\n' "$CRUN_BIN" \
+            | sudo tee /etc/containers/containers.conf.d/10-openadkit-crun.conf
+
+          # Diagnostics. Every probe is individually guarded: this step runs
+          # under bash -e (GitHub's default, NOT set -euo pipefail), so a bare
+          # `command -v` for a binary that is absent, or a `podman info` from a
+          # podman that still cannot start, would abort the step and cost
+          # another blind arm64 cycle -- exactly the failure mode these probes
+          # exist to prevent. Diagnostics must never become a new failure mode.
+          echo "--- container runtime diagnostics ---"
+          command -v podman crun runc || true
+          # type -a, not just command -v: it lists EVERY match on PATH, which
+          # is what makes an image-supplied binary shadowing /usr/bin visible.
+          type -a podman crun runc || true
+          podman --version || true
+          crun --version || true
+          runc --version || true
+          dpkg -l podman crun conmon catatonit 2>/dev/null || true
+          cat /etc/containers/containers.conf.d/10-openadkit-crun.conf || true
+          # sudo, because every podman invocation that matters here is a root
+          # one (aib runs under sudo), and rootful podman is what reads
+          # /etc/containers. Expected to fail at this point in the job on a
+          # runner image that left a stale /dev/shm/libpod_lock behind -- that
+          # is cleared by the storage step below, which is why the same probe
+          # is repeated afterwards, where its answer is the one that counts.
+          sudo podman info --format '{{.Host.OCIRuntime.Name}} {{.Host.OCIRuntime.Path}} {{.Host.OCIRuntime.Version}}' \
+            || sudo podman info 2>&1 | tail -30 || true
 
       - name: Put container storage on a non-overlay location (aib CI pattern)
         run: |
@@ -152,6 +206,20 @@ jobs:
           sudo mkdir -p "$RUNNER_TEMP/_containers/var" "$RUNNER_TEMP/_containers/run" /var/lib/containers /run/containers
           sudo mount --bind "$RUNNER_TEMP/_containers/var" /var/lib/containers
           sudo mount --bind "$RUNNER_TEMP/_containers/run" /run/containers
+
+      - name: Confirm podman's OCI runtime (post-reset, pre-aib)
+        # The same probe as in "Install host tools", repeated at the first
+        # point in the job where podman can actually start: the storage step
+        # above is what clears the stale /dev/shm/libpod_lock, so this is the
+        # earliest reading that reflects the state every aib step below runs
+        # in. It is the reading that answers "did the crun pin take?" -- and
+        # it costs seconds here versus an hour-plus to reach the same question
+        # via a build-builder failure. Non-fatal on purpose (|| true): a
+        # diagnostic must never become a new failure mode, and the aib steps
+        # below remain the real gate.
+        run: |
+          sudo podman info --format 'OCIRuntime: {{.Host.OCIRuntime.Name}} {{.Host.OCIRuntime.Path}} {{.Host.OCIRuntime.Version}}' \
+            || sudo podman info 2>&1 | tail -30 || true
 
       - name: Install automotive-image-builder runner
         run: |
