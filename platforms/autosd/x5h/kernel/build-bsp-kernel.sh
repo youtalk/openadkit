@@ -98,8 +98,18 @@ if [ ! -d "$SRC" ]; then
   rm -f "$OUT/src.tar.gz"
 fi
 cd "$SRC"
+if [ -n "$FWDIR" ]; then
+  [ -f "$FWDIR/rcar_gen5_mp_phy.bin" ] \
+    || { echo "FATAL: $FWDIR/rcar_gen5_mp_phy.bin not found (--firmware dir must hold the SDK blob)"; exit 1; }
+  mkdir -p "$SRC/firmware"
+  install -m 0644 "$FWDIR/rcar_gen5_mp_phy.bin" "$SRC/firmware/"
+fi
 cp "$HERE/x5h-board.config" .config
-scripts/kconfig/merge_config.sh -m .config "$HERE/autosd.config" "$HERE/virtio.config"
+if [ -n "$FWDIR" ]; then
+  scripts/kconfig/merge_config.sh -m .config "$HERE/autosd.config" "$HERE/virtio.config" "$HERE/board-firmware.config"
+else
+  scripts/kconfig/merge_config.sh -m .config "$HERE/autosd.config" "$HERE/virtio.config"
+fi
 make olddefconfig
 # Assert every declaration in both fragments landed. =y must be exactly =y;
 # =m may legitimately resolve to =y (a select can promote it) but must not
@@ -125,7 +135,18 @@ assert_fragment() {
     esac
   done < "$frag"
 }
-assert_fragment "$HERE/autosd.config"
+# board-firmware.config deliberately overrides autosd.config's
+# CONFIG_EXTRA_FIRMWARE="" -- filter that one symbol out of the autosd
+# assertion in firmware mode; every other declaration must land verbatim
+# in both modes.
+if [ -n "$FWDIR" ]; then
+  grep -v '^CONFIG_EXTRA_FIRMWARE' "$HERE/autosd.config" > "$OUT/.autosd.nofw.config"
+  assert_fragment "$OUT/.autosd.nofw.config"
+  rm -f "$OUT/.autosd.nofw.config"
+  assert_fragment "$HERE/board-firmware.config"
+else
+  assert_fragment "$HERE/autosd.config"
+fi
 assert_fragment "$HERE/virtio.config"
 KVER="$(make -s kernelrelease)"
 [ "$KVER" = "6.1.102-autosd" ] || { echo "FATAL: kernelrelease is $KVER, expected 6.1.102-autosd"; exit 1; }
