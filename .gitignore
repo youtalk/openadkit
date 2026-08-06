@@ -42,6 +42,11 @@ capture/
 # unable to stage an NDA binary, instead of relying on operator discipline.
 /x5h-work/
 /x5h/
+# R-Car xOS Platform SDK v4.35.0 extraction (samples, manuals, prebuilt CR52
+# ELFs) unpacked at the repo root on 2026-08-06 so the host PC can browse the
+# vendor docs. Same hard NDA boundary and reflexive-`git add -A` guard as
+# /x5h/ above: nothing under it may ever be staged.
+/rcar-xos/
 /CES2026/
 /tmux-x5h-*.log
 # Unverified-provenance archive picked up mid board session; "safety island"
