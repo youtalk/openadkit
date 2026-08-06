@@ -119,38 +119,66 @@ jobs:
         run: df -h /
 
       - name: Install host tools
-        # crun is installed EXPLICITLY alongside podman so both halves of the
-        # container stack come from the same Ubuntu archive and are
-        # version-matched. The Ubicloud arm64 runner image (2.336.0,
-        # 2026-08-06) ships its own podman stack outside dpkg -- its systemd
-        # units live in /usr/local/lib/systemd/system -- and apt installing
-        # only podman (4.9.3+ds1-1ubuntu0.2), conmon and catatonit left that
-        # new podman paired with the image's older crun, which then rejected
-        # the ociVersion podman writes into config.json: "OCI runtime error:
-        # crun: unknown version specified". Naming crun here makes the pair a
-        # single apt transaction instead of two stacks mixed by accident.
+        # podman and crun are installed only when ABSENT, because two
+        # container stacks coexist on this runner and apt supplies the wrong
+        # one. Measured on the Ubicloud arm64 runner image (2.336.0,
+        # 2026-08-06): the image ships a matched, modern pair in
+        # /usr/local/bin, outside dpkg -- podman 5.8.4 with crun 1.28, its
+        # systemd units in /usr/local/lib/systemd/system -- while
+        # `apt-get install podman crun` adds an OLDER pair in /usr/bin
+        # (podman 4.9.3+ds1-1ubuntu0.2, crun 1.14.1). sudo resolves binaries
+        # through secure_path, which lists /usr/local/bin before /usr/bin, so
+        # podman 5.8.4 is the one that actually runs. Pinning that podman to
+        # the dpkg-owned /usr/bin/crun therefore paired it with crun 1.14.1,
+        # whose supported OCI spec is 1.0.0, and crun rejected the newer
+        # ociVersion podman 5.8.4 writes into config.json: "OCI runtime
+        # error: crun: unknown version specified", exit 126. Installing only
+        # what is missing makes apt a no-op on an image that already ships
+        # both, matching the last known-green run (2026-08-04), while still
+        # covering an image that ships neither.
         run: |
           sudo apt-get update
-          sudo apt-get install -y podman crun skopeo qemu-system-arm qemu-utils expect
+          # skopeo/qemu/expect are unconditional; podman and crun are added
+          # only if nothing already provides them. command -v returns nonzero
+          # on a miss, which under bash -e would abort the step, so the miss
+          # is what appends to the list rather than what fails.
+          PKGS=(skopeo qemu-system-arm qemu-utils expect)
+          for p in podman crun; do
+            command -v "$p" >/dev/null 2>&1 || PKGS+=("$p")
+          done
+          echo "apt packages to install: ${PKGS[*]}"
+          sudo apt-get install -y "${PKGS[@]}"
 
           # Then make podman's runtime choice explicit rather than leaving it
-          # to a binary search the image can win. This is a DROP-IN, not an
-          # edit of containers.conf: podman 4.9 reads
+          # to a binary search. This is a DROP-IN, not an edit of
+          # containers.conf: podman reads
           # /usr/share/containers/containers.conf, then
           # /etc/containers/containers.conf, then
           # /etc/containers/containers.conf.d/*.conf in alphanumeric order,
-          # with later files overriding earlier ones (containers.conf(5),
-          # checked against podman 4.9.3). The drop-in therefore wins over
-          # whatever either full config says, without clobbering unrelated
-          # settings the image may depend on. The filename must end in .conf.
-          # The path comes from the crun package's own dpkg manifest, so it
-          # names the binary apt just installed rather than whatever `crun`
-          # happens to resolve to on PATH.
-          CRUN_BIN="$(dpkg -L crun 2>/dev/null | grep -m1 -E '^/usr/(local/)?s?bin/crun$' || true)"
-          [ -n "$CRUN_BIN" ] || CRUN_BIN=/usr/bin/crun
-          sudo install -d -m 0755 /etc/containers/containers.conf.d
-          printf '[engine]\nruntime = "crun"\n\n[engine.runtimes]\ncrun = ["%s"]\n' "$CRUN_BIN" \
-            | sudo tee /etc/containers/containers.conf.d/10-openadkit-crun.conf
+          # with later files overriding earlier ones (containers.conf(5)).
+          # The drop-in therefore wins over whatever either full config says,
+          # without clobbering unrelated settings the image may depend on;
+          # the filename must end in .conf. The mechanism is confirmed --
+          # the post-reset probe below reported exactly the path this file
+          # named -- so only the VALUE changes here. The path is now resolved
+          # with `command -v crun`, i.e. the first crun on PATH, the same way
+          # the shell resolves podman itself, so the pin always names the
+          # half of the pair that matches the podman that will actually run.
+          # PATH order and sudo's secure_path agree here: both put
+          # /usr/local/bin ahead of /usr/bin.
+          CRUN_BIN="$(command -v crun 2>/dev/null || true)"
+          if [ -n "$CRUN_BIN" ]; then
+            sudo install -d -m 0755 /etc/containers/containers.conf.d
+            printf '[engine]\nruntime = "crun"\n\n[engine.runtimes]\ncrun = ["%s"]\n' "$CRUN_BIN" \
+              | sudo tee /etc/containers/containers.conf.d/10-openadkit-crun.conf
+          else
+            # No crun anywhere: writing a drop-in pointing at a path that
+            # does not exist would be strictly worse than not pinning at
+            # all, so remove any stale drop-in and let podman pick its own
+            # runtime. Say so loudly -- this is not an expected state.
+            echo "WARNING: no crun found on PATH; not pinning podman's OCI runtime" >&2
+            sudo rm -f /etc/containers/containers.conf.d/10-openadkit-crun.conf
+          fi
 
           # Diagnostics. Every probe is individually guarded: this step runs
           # under bash -e (GitHub's default, NOT set -euo pipefail), so a bare
