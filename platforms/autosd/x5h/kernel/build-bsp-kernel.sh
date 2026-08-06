@@ -171,7 +171,35 @@ cd "$SRC"
 # so the assembler's DWARF directory is remapped the same way; confirmed
 # against the pinned 13.2.Rel1 binutils in isolation. Appended to any
 # caller-supplied value rather than replacing it.
-DEBUG_PREFIX_MAP="-fdebug-prefix-map=$SRC=/x5h/linux-bsp"
+#
+# $TOOLDIR is mapped as well as $SRC, because two objects' compile flags name
+# the TOOLCHAIN's absolute path rather than the source tree's. Both use the
+# same idiom, which exists to make <arm_neon.h> reachable from a
+# -ffreestanding kernel build:
+#   arch/arm64/lib/Makefile:13
+#     CFLAGS_xor-neon.o += -isystem $(shell $(CC) -print-file-name=include)
+#   lib/raid6/Makefile:40  (NEON_FLAGS, applied to recov_neon_inner.o)
+#     NEON_FLAGS        += -isystem $(shell $(CC) -print-file-name=include)
+# That expands to $TOOLDIR/<toolchain>/lib/gcc/.../include, which lands in
+# the DWARF directory table of xor-neon.o and recov_neon_inner.o and hence
+# in the NT_GNU_BUILD_ID of xor-neon.ko and raid6_pq.ko -- which were exactly
+# the two modules of 972 that still differed between a local build under
+# /home/youtalk/.cache/x5h-toolchain and a CI build under
+# /home/runner/.cache/x5h-toolchain, 20 bytes each. Measured after adding
+# this map: the directory entry reads /x5h/toolchain/..., those two build-ids
+# moved, and Image, dtb and the other 973 tar members stayed byte-identical.
+# crypto/Makefile:126 uses the same idiom for aegis128-neon-inner.o; this
+# config does not build it (CONFIG_CRYPTO_AEGIS128 is not set), but the same
+# map would cover it. Both maps go into both variables.
+#
+# raid6_pq.ko is NOT the $(AWK)/unroll.awk problem an earlier reading took it
+# for (lib/raid6/Makefile:55 generates int{1,2,4,8,16,32}.c). Checked here:
+# mawk 1.3.4 and busybox awk emit byte-identical int*.c, and the generated
+# sources carry no host or path string. The toolchain include path above
+# accounts for it. Cross-host identity of raid6_pq.ko is therefore EXPECTED
+# but not yet proven -- it needs one CI artifact built with this map to
+# confirm, since every local build here shares one $TOOLDIR value.
+DEBUG_PREFIX_MAP="-fdebug-prefix-map=$SRC=/x5h/linux-bsp -fdebug-prefix-map=$TOOLDIR=/x5h/toolchain"
 export KCFLAGS="${KCFLAGS:+$KCFLAGS }$DEBUG_PREFIX_MAP"
 export KAFLAGS="${KAFLAGS:+$KAFLAGS }$DEBUG_PREFIX_MAP"
 if [ -n "$FWDIR" ]; then
