@@ -11,6 +11,9 @@ build, two images: the board's copy additionally embeds the mp_phy firmware —
 see "One build, two images" below) — so every container-runtime question is
 answered before board time.
 
+- [CR52 dual boot + RPMsg](rpmsg-dualboot.md) — run FreeRTOS on the
+  realtime core under AutoSD, loaded at runtime via remoteproc.
+
 ## Folder Structure
 
 - `aib/`: automotive-image-builder manifest (distro `autosd10-sig`)
