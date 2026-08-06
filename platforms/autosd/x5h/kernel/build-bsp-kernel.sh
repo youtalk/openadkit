@@ -1,14 +1,81 @@
 #!/usr/bin/env bash
-# Build the one-image X5H kernel: the board's own 6.1.102 BSP source with
-# the AutoSD-alignment + QEMU-gate fragments merged over the board-extracted
-# config. Native aarch64 in CI; --config-only also runs on x86_64 (config
-# targets need no cross-compiler binaries).
-# Usage: build-bsp-kernel.sh [--config-only] <outdir>
+# Build the X5H kernel: the board's own 6.1.102 BSP source with the
+# AutoSD-alignment + QEMU-gate fragments merged over the board-extracted
+# config, compiled with the PINNED ARM GNU 13.2.Rel1 x86_64-hosted cross
+# toolchain.
+#
+# Why pinned: the 2026-08-05 board session root-caused the rebuilt
+# kernel's 0.09s hang to a layout-sensitive platform bug that wedges one
+# secondary CPU at SMP bringup. With this exact config, GCC 13.2 booted
+# 3/3 distinct layouts and GCC 13.3 wedged 3/3. The pin is EMPIRICAL, not
+# a guarantee -- the board smoke stays the final arbiter for any kernel
+# change (the QEMU gate cannot see this defect class). ARM ships no
+# aarch64-hosted 13.2.Rel1 aarch64-none-linux-gnu toolchain (404 on both
+# mirrors, verified 2026-08-05), hence x86_64 cross everywhere, CI
+# included. An environment-dependent compiler fallback is exactly the
+# path by which this bug returns: none is offered.
+#
+# Modes:
+#   (default)         full build, fw-less gate image (CI / QEMU gate)
+#   --firmware <dir>  full build, board image embedding rcar_gen5_mp_phy.bin
+#                     from <dir> (REQUIRED for TSN netboot; NDA SDK blob --
+#                     local builds only, never CI)
+#   --config-only     config merge + asserts only; no compiler needed
+#   --toolchain-only  fetch/verify/assert the toolchain, then exit
+# Usage: build-bsp-kernel.sh [--config-only|--toolchain-only] [--firmware <dir>] <outdir>
 # Produces in <outdir>: Image-autosd, r8a78000-ironhide-uio-autosd.dtb,
-#   modules-6.1.102-autosd.tar, kernelrelease.txt, config-autosd.txt
+#   modules-6.1.102-autosd.tar, kernelrelease.txt, config-autosd.txt,
+#   provenance.txt, extract-ikconfig
 set -euo pipefail
-CONFIG_ONLY=
-[ "${1:-}" = "--config-only" ] && { CONFIG_ONLY=1; shift; }
+
+TOOLCHAIN_URL="https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/13.2.rel1/binrel/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz"
+TOOLCHAIN_SHA256=12fcdf13a7430655229b20438a49e8566e26551ba08759922cdaf4695b0d4e23
+TOOLCHAIN_NAME=arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-linux-gnu
+# ARM's tarball basename says "rel1" but its single top-level directory
+# says "Rel1" -- two different strings, not one. The cache key and the
+# download URL use the former; CROSS_COMPILE must use the latter.
+TOOLCHAIN_DIRNAME=arm-gnu-toolchain-13.2.Rel1-x86_64-aarch64-none-linux-gnu
+TOOLCHAIN_ID="Arm GNU Toolchain 13.2.rel1"
+TOOLDIR="${X5H_TOOLCHAIN_DIR:-$HOME/.cache/x5h-toolchain}"
+
+CONFIG_ONLY= TOOLCHAIN_ONLY= FWDIR=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --config-only) CONFIG_ONLY=1; shift ;;
+    --toolchain-only) TOOLCHAIN_ONLY=1; shift ;;
+    --firmware)
+      [ -n "${2:-}" ] || { echo "FATAL: --firmware needs a directory"; exit 1; }
+      FWDIR="$(cd "$2" && pwd)"; shift 2 ;;
+    *) break ;;
+  esac
+done
+
+export ARCH=arm64
+export CROSS_COMPILE="$TOOLDIR/$TOOLCHAIN_DIRNAME/bin/aarch64-none-linux-gnu-"
+
+fetch_toolchain() {
+  if [ ! -x "${CROSS_COMPILE}gcc" ]; then
+    [ "$(uname -m)" = x86_64 ] \
+      || { echo "FATAL: pinned toolchain is x86_64-hosted; host is $(uname -m)"; exit 1; }
+    mkdir -p "$TOOLDIR"
+    [ -f "$TOOLDIR/$TOOLCHAIN_NAME.tar.xz" ] \
+      || curl -fL "$TOOLCHAIN_URL" -o "$TOOLDIR/$TOOLCHAIN_NAME.tar.xz"
+    echo "$TOOLCHAIN_SHA256  $TOOLDIR/$TOOLCHAIN_NAME.tar.xz" | sha256sum -c - \
+      || { echo "FATAL: toolchain tarball failed sha256 verification"; exit 1; }
+    # Keep the tarball after extraction: CI caches the tarball, not the tree.
+    tar -xJf "$TOOLDIR/$TOOLCHAIN_NAME.tar.xz" -C "$TOOLDIR"
+  fi
+  "${CROSS_COMPILE}gcc" --version | head -1 | grep -qF "$TOOLCHAIN_ID" \
+    || { echo "FATAL: ${CROSS_COMPILE}gcc is not $TOOLCHAIN_ID: $("${CROSS_COMPILE}gcc" --version | head -1)"; exit 1; }
+}
+
+if [ -n "$TOOLCHAIN_ONLY" ]; then
+  fetch_toolchain
+  echo "OK (toolchain-only): $("${CROSS_COMPILE}gcc" --version | head -1)"
+  exit 0
+fi
+
+[ -n "${1:-}" ] || { echo "Usage: build-bsp-kernel.sh [--config-only|--toolchain-only] [--firmware <dir>] <outdir>"; exit 1; }
 OUT="$(mkdir -p "$1" && cd "$1" && pwd)"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # Pinned commit of renesas-rcar/linux-bsp branch v6.1.102/rcar-6.0.0.rc12
@@ -23,8 +90,6 @@ if [ ! -d "$SRC" ]; then
   rm -f "$OUT/src.tar.gz"
 fi
 cd "$SRC"
-export ARCH=arm64
-[ "$(uname -m)" = "aarch64" ] || export CROSS_COMPILE=aarch64-linux-gnu-
 cp "$HERE/x5h-board.config" .config
 scripts/kconfig/merge_config.sh -m .config "$HERE/autosd.config" "$HERE/virtio.config"
 make olddefconfig
@@ -62,6 +127,7 @@ if [ -n "$CONFIG_ONLY" ]; then
   echo "OK (config-only): $KVER"
   exit 0
 fi
+fetch_toolchain
 make -j"$(nproc)" Image dtbs modules
 cp arch/arm64/boot/Image "$OUT/Image-autosd"
 cp arch/arm64/boot/dts/renesas/r8a78000-ironhide-uio.dtb "$OUT/r8a78000-ironhide-uio-autosd.dtb"
