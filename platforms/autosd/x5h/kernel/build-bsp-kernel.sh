@@ -97,8 +97,30 @@ fetch_toolchain() {
     # Keep the tarball after extraction: CI caches the tarball, not the tree.
     tar -xJf "$TOOLDIR/$TOOLCHAIN_NAME.tar.xz" -C "$TOOLDIR"
   fi
-  "${CROSS_COMPILE}gcc" --version | head -1 | grep -qF "$TOOLCHAIN_ID" \
-    || { echo "FATAL: ${CROSS_COMPILE}gcc is not $TOOLCHAIN_ID: $("${CROSS_COMPILE}gcc" --version | head -1)"; exit 1; }
+  # Capture once, then match with `case`. Two reasons, both small.
+  # (1) It separates "gcc could not run at all" from "gcc ran and is the
+  # wrong toolchain". The previous `gcc --version | head -1 | grep -qF`
+  # form conflated them: a gcc that failed to exec made grep fail, and the
+  # diagnostic then re-ran the same failing gcc to quote it, printing
+  # "is not $TOOLCHAIN_ID: " with an empty version.
+  # (2) It leaves no pipeline. The first line is taken with parameter
+  # expansion rather than `| head -1` deliberately: under this file's
+  # `set -o pipefail` an early-exiting consumer makes a producer that
+  # outruns the 64 KiB pipe buffer die of SIGPIPE, and the guard then
+  # returns 141 exactly when it MATCHES (the db855a4 bug). The old line
+  # was safe only because `gcc --version` emits ~200 bytes -- a fact
+  # invisible here, so swapping in a chattier probe (`gcc -v` dumps the
+  # full specs) would silently reintroduce it. No pipeline, no trap.
+  # `case` with a quoted pattern is a literal substring match, i.e. exactly
+  # what grep -qF did. The `||` stays explicit: a bare assignment would
+  # exit via set -e with no FATAL: line, losing the diagnostic.
+  GCC_VER="$("${CROSS_COMPILE}gcc" --version)" \
+    || { echo "FATAL: ${CROSS_COMPILE}gcc failed to run"; exit 1; }
+  GCC_VER="${GCC_VER%%$'\n'*}"
+  case "$GCC_VER" in
+    *"$TOOLCHAIN_ID"*) ;;
+    *) echo "FATAL: ${CROSS_COMPILE}gcc is not $TOOLCHAIN_ID: $GCC_VER"; exit 1 ;;
+  esac
 }
 
 if [ -n "$TOOLCHAIN_ONLY" ]; then
