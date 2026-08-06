@@ -35,9 +35,20 @@ jobs:
     # error fail the workflow before the multi-hour arm64 job spends
     # anything.
     runs-on: ubicloud-standard-16
-    timeout-minutes: 60
+    # Unmeasured on purpose-built hardware as of this branch: no run of this
+    # job has completed yet, so the number is a budget, not an observation.
+    # It has to cover a cold 134 MB toolchain fetch, a ~200 MB source fetch,
+    # and a full `Image dtbs modules` build of a Yocto-derived BSP config
+    # carrying debug info -- so 90 rather than a tighter guess, and the
+    # df -h probes around the build below are what make a timeout or an
+    # ENOSPC diagnosable instead of just red. Tighten it once a green run
+    # has given a real figure.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+
+      - name: Report disk headroom (before the kernel build)
+        run: df -h /
 
       - name: Install kernel build dependencies
         run: |
@@ -53,6 +64,15 @@ jobs:
       - name: Build the BSP kernel (pinned source, pinned ARM GNU 13.2.Rel1 cross)
         run: |
           platforms/autosd/x5h/kernel/build-bsp-kernel.sh "$RUNNER_TEMP/bspkernel"
+
+      - name: Report disk headroom (after the kernel build)
+        # always(), and paired with the probe before the build: a kernel tree
+        # plus its object files is tens of GB, and an ENOSPC surfaces as an
+        # unrelated-looking compiler or tar error. Without a before/after
+        # pair there is nothing in the log to tell that apart from a genuine
+        # build break.
+        if: always()
+        run: df -h /
 
       - name: Upload the kernel artifact
         uses: actions/upload-artifact@v4
