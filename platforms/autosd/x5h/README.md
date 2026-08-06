@@ -6,8 +6,10 @@ same NFS root: the unmodified Renesas BSP kernel 6.1.102, or a rebuilt
 `6.1.102-autosd` kernel built from the same public BSP source with SELinux,
 `EXT4_FS_SECURITY`, nftables, EROFS and dm-verity compiled in (see "Rebuilt
 kernel (6.1.102-autosd)" below). Validated off-board first by a QEMU gate that
-boots the rootfs under the byte-identical kernel image the board netboots —
-so every container-runtime question is answered before board time.
+boots the rootfs under the same-lineage kernel image the board netboots (one
+build, two images: the board's copy additionally embeds the mp_phy firmware —
+see "One build, two images" below) — so every container-runtime question is
+answered before board time.
 
 ## Folder Structure
 
@@ -21,10 +23,13 @@ so every container-runtime question is answered before board time.
 
 ## QEMU gate semantics
 
-The gate boots the rootfs export under the byte-identical kernel image the
-board netboots — `Image-autosd`, produced by `kernel/build-bsp-kernel.sh` —
-logs in as root, runs `scripts/gate-guest.sh` inside the guest, and judges
-the run by grepping the session log for a fixed set of markers.
+The gate boots the rootfs export under the same-lineage kernel image the
+board netboots — `Image-autosd`, produced by `kernel/build-bsp-kernel.sh`
+(one build, two images: the board's copy additionally embeds the mp_phy
+firmware — see "One build, two images" in "Rebuilt kernel
+(6.1.102-autosd)" below) — logs in as root, runs `scripts/gate-guest.sh`
+inside the guest, and judges the run by grepping the session log for a
+fixed set of markers.
 `gate-guest.sh` emits the markers; `qemu-gate.exp` judges them by string
 match — the two must stay in exact sync.
 
@@ -168,37 +173,71 @@ The BSP kernel's source is public: `renesas-rcar/linux-bsp`, branch
 `v6.1.102/rcar-6.0.0.rc12`, which carries `r8a78000.dtsi` and the Ironhide
 DTS variants. `kernel/build-bsp-kernel.sh <outdir>` builds it at a pinned
 commit (the ref is a mutable branch, so the SHA hardcoded in the script is
-the source of truth, not the branch name) with three config layers merged
-via `merge_config.sh`: `kernel/x5h-board.config` (the board's own
+the source of truth, not the branch name) with config layers merged via
+`merge_config.sh`: `kernel/x5h-board.config` (the board's own
 IKCONFIG-extracted base config), `kernel/autosd.config` (SELinux,
 `EXT4_FS_SECURITY`, nftables, EROFS, dm-verity — each symbol commented with
-the AutoSD feature needing it), and `kernel/virtio.config` (QEMU-gate
-hardware, deliberately compiled into the board image too: the gate boots
-the byte-identical `Image-autosd` the board netboots, the one-image
-property). The script asserts every declaration in the last two layers
-landed correctly, and that the built `kernelrelease` is exactly
-`6.1.102-autosd` — either check failing is a FATAL build error, not a
-warning.
+the AutoSD feature needing it), `kernel/virtio.config` (QEMU-gate hardware,
+deliberately compiled into the board image too), and — only under
+`--firmware <dir>` — `kernel/board-firmware.config` (embeds
+`rcar_gen5_mp_phy.bin`, see below). The script asserts every fragment
+declaration landed, that the built `kernelrelease` is exactly
+`6.1.102-autosd`, and that the compiler is exactly the pinned toolchain —
+each check failing is a FATAL build error, not a warning.
+
+**The compiler is pinned to ARM GNU 13.2.Rel1 (x86_64-hosted cross), on
+board evidence.** The 2026-08-05 debug session (18 boots, 14 binaries)
+root-caused a boot hang to a layout-sensitive platform bug: one random
+secondary CPU wedges with a corrupt PC within ~20–90 ms of SMP bringup, and
+functionally identical kernels differing only in byte layout (`Image-b1a`
+vs `Image-b1a1`) land on opposite sides. With the full CI config, GCC 13.2
+booted 3/3 distinct layouts; GCC 13.3 wedged 3/3. The pin is **empirical,
+not a guarantee** — which is why the compiler identity is asserted at
+build time and again at gate runtime (`GATE1_CCVER_OK`), and why **the
+board smoke remains the final arbiter for any kernel change: the QEMU gate
+is structurally blind to this defect class** (no real silicon, virtio-only
+I/O). ARM ships no aarch64-hosted 13.2.Rel1 toolchain, so CI cross-compiles
+in a dedicated x64 job (`build-kernel`) and hands the `x5h-kernel` artifact
+to the arm64 gate job.
+
+**One build, two images.** The old "one-image" invariant (the gate boots
+the byte-identical file the board netboots) could not survive the
+firmware finding: the board needs an NDA blob embedded, and CI must never
+see NDA material. Its replacement keeps what actually mattered — the gate
+boots the same kernel *lineage* the board runs: same pinned source SHA,
+same pinned toolchain, same reproducible-build env
+(`KBUILD_BUILD_TIMESTAMP/USER/HOST` are fixed, so identical inputs give
+byte-identical artifacts on any machine), same `kernelrelease`, same
+`Image-autosd` filename; the config delta between the two images is
+exactly `CONFIG_EXTRA_FIRMWARE`/`CONFIG_EXTRA_FIRMWARE_DIR`, carried by one
+in-repo fragment. Kinship is checked mechanically, not by convention:
+`provenance.txt` records the toolchain and artifact hashes, a local
+fw-less rebuild must sha256-match the CI artifact, `GATE1_CCVER` proves
+the gate booted a pinned-toolchain kernel, and `stage-rebuilt-kernel.sh`
+refuses (via the exported `extract-ikconfig`) to stage any Image that does
+not embed the firmware.
 
 Artifacts (also staged into the CI debugging bundle): `Image-autosd`,
 `r8a78000-ironhide-uio-autosd.dtb`, `modules-6.1.102-autosd.tar`,
 `kernelrelease.txt`, `config-autosd.txt`.
 
-**One deliberate functional divergence from the board's own config:
-`CONFIG_EXTRA_FIRMWARE` is emptied.** The board bakes three Renesas PCIe6
-blobs (`rcar_gen5_mp_phy.bin`, `rcar_gen5_pcie6_iccm.bin`,
-`rcar_gen5_pcie6_dccm.bin`) into its kernel, and the public source tree does
-not carry them — they ship only in the NDA R-Car xOS SDK, so a from-source
-build fails outright without them. They are requested exclusively by
-`drivers/pci/controller/dwc/pcie6-rcar-gen5.c`, and the board's own BSP
-kernel loads them only to report `pcie6-rcar da000000.pcie: Phy link never
-came up` — nothing is attached to PCIe6 as this board is configured, and
-neither netboot (TSN, `tsn5`) nor storage (UFS `sda`-`sdd` plus eMMC) goes
-through it. So the rebuilt kernel has no PCIe6 firmware and the BSP kernel
-does; on this hardware that is a difference without an observable
-consequence. A later phase that actually needs PCIe6 must restore the
-board's original value *and* solve getting the blobs to CI. See the comment
-block in `kernel/autosd.config` for the full reasoning.
+**The firmware split.** The board's own kernel bakes in three Renesas
+blobs; they ship only in the NDA R-Car xOS SDK, so no from-source CI build
+can embed them. The gate image therefore carries
+`CONFIG_EXTRA_FIRMWARE=""` — but the 2026-08-05 board session proved this
+is **not** a difference without consequence: without `rcar_gen5_mp_phy.bin`
+the built-in MP-PHY driver fails probe, `renesas_eth_sw` defers forever,
+and the board has no TSN link and cannot NFS-netboot at all (the state
+commit 695106c unknowingly shipped). The board image is built locally with
+`--firmware <dir>` (a directory containing the SDK blob), which merges
+`kernel/board-firmware.config` to embed exactly that one blob. The two
+PCIe6 blobs (`rcar_gen5_pcie6_iccm.bin`, `rcar_gen5_pcie6_dccm.bin`) stay
+excluded from both images: nothing is attached to PCIe6 on this board, and
+the BSP kernel loads them only to report `Phy link never came up`. **NDA
+boundary:** the blobs, and any Image embedding them, exist only on the dev
+machine and the board LAN — never in the repo, CI, CI logs, or CI
+artifacts; the repo carries only the blob filename, which the public
+linux-bsp driver source already does.
 
 ### Gate markers (rebuilt-kernel edition)
 
@@ -211,7 +250,10 @@ reused — GATE6 and GATE7 are new, not GATE5's successor under a new name.
 | Marker | Meaning | Required |
 | --- | --- | --- |
 | `GATE1_LOGIN_OK` | Guest login succeeded. | yes |
-| `GATE1_KVER=<release>` | `uname -r` inside the guest. The runtime assertion of the one-image invariant — `build-bsp-kernel.sh` asserts `kernelrelease` is exactly `6.1.102-autosd` at build time, but this is what proves the gate actually *booted* that release, the same one the board netboots. | yes, must equal `6.1.102-autosd` |
+| `GATE1_KVER=<release>` | `uname -r` inside the guest. The runtime `kernelrelease` half of the one-build-two-images invariant (`GATE1_CCVER_OK` is the toolchain half) — `build-bsp-kernel.sh` asserts `kernelrelease` is exactly `6.1.102-autosd` at build time, but this is what proves the gate actually *booted* that release, the same one the board netboots. | yes, must equal `6.1.102-autosd` |
+| `GATE1_CCVER=<...>` | `/proc/version` of the booted kernel — records which compiler built it. | informational |
+| `GATE1_CCVER_OK` | `/proc/version` contains `Arm GNU Toolchain 13.2.rel1`: the gate booted a pinned-toolchain kernel. The wedge itself is invisible to QEMU, so this is the one pin-regression CI can catch. | yes |
+| `GATE1_CCVER_FAIL` | The booted kernel was built by some other compiler — the toolchain pin has been broken. | must be ABSENT |
 | `GATE1_SYSTEMD_STATE=<state>` | `systemctl is-system-running` output, informational — no expected value is asserted here; unlike the retired edition, no CI or board run of this gate has recorded one yet. | no |
 | `GATE1_MODPROBE_FAIL` | `modprobe -a overlay veth bridge br_netfilter btrfs nf_tables` failed against the injected/staged module tree — a staging bug, not a kernel one (the rebuilt kernel ships these as modules, exactly as the BSP kernel does). | must be ABSENT |
 | `GATE2_STORE_FS=<fstype>` | Filesystem podman's store sat on for the GATE2 probe (expected `ext4`, since GATE2 mounts nothing). | yes, must equal `ext4` |

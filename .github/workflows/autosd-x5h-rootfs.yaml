@@ -9,8 +9,9 @@ on:
 permissions:
   contents: read
 # Push (branch) and pull_request (paths filter) both fire for the same commit
-# once the fork PR exists, and this job is multi-hour arm64 CI (aib build +
-# kernel compile + emulated container builds + a TCG QEMU boot). Group by the
+# once the fork PR exists, and this workflow runs two jobs: a pinned-toolchain
+# x64 kernel compile (build-kernel), then multi-hour arm64 CI (aib build +
+# native container builds + a TCG QEMU boot, build-and-gate). Group by the
 # commit SHA rather than by ref/PR-number so a push-triggered run and the
 # pull_request-triggered run it also fires collapse into one concurrency slot
 # and the redundant one is cancelled instead of both running to completion.
