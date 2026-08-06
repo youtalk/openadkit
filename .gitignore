@@ -11,6 +11,9 @@ autoware/
 *.cursorignore
 *.cursorrules
 
+# Claude Code local agent configuration
+/.claude/
+
 # colcon
 build/
 install/
@@ -41,3 +44,7 @@ capture/
 /x5h/
 /CES2026/
 /tmux-x5h-*.log
+# Unverified-provenance archive picked up mid board session; "safety island"
+# is an X5H/R-Car subsystem name so it may hold NDA material -- never opened,
+# never staged, ignored on the same reflexive-`git add -A` grounds as above.
+/home-test-youtalk-autoware-safety-island.zip

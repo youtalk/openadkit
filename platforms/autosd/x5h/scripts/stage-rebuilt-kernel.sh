@@ -29,7 +29,7 @@ FW_LINE='CONFIG_EXTRA_FIRMWARE="rcar_gen5_mp_phy.bin"'
 # that as "built without --firmware?" would send the operator into a wrong
 # 40-minute rebuild mid session, so separate the cases before judging the
 # firmware line.
-IKCFG="$("$BUNDLE/extract-ikconfig" "$BUNDLE/Image-autosd" 2>/dev/null || true)"
+IKCFG="$("$BUNDLE/extract-ikconfig" "$BUNDLE/Image-autosd" || true)"
 [ -n "$IKCFG" ] \
     || { echo "FATAL: extract-ikconfig recovered no embedded config from $BUNDLE/Image-autosd -- the Image is truncated, corrupt, or was not built with CONFIG_IKCONFIG. This is NOT the --firmware question: rebuilding with --firmware will not fix it. Check the file's size/sha256 against provenance.txt first."; exit 1; }
 printf '%s\n' "$IKCFG" | grep -qxF "$FW_LINE" \

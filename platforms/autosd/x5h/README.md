@@ -335,12 +335,14 @@ That is enforced, not merely expected: `stage-rebuilt-kernel.sh`
 `extract-ikconfig`s the candidate `Image-autosd` and **FATALs before anything
 reaches TFTP** unless the embedded config carries
 `CONFIG_EXTRA_FIRMWARE="rcar_gen5_mp_phy.bin"`. Handing it the CI artifact —
-or a local build where `--firmware` was omitted or, just as easily, written
-*after* `<outdir>` — fails there and costs a full 30–60 minute rebuild mid
-session, so confirm the bundle's `provenance.txt` names the blob before
-starting. (A second, separate FATAL covers an `Image` from which no embedded
-config can be read at all — truncated or corrupt. That one is *not* the
-`--firmware` question and rebuilding with `--firmware` will not fix it.)
+or a local build where `--firmware` was omitted — fails there and costs a
+full 30–60 minute rebuild mid session, so confirm the bundle's
+`provenance.txt` names the blob before starting. (`build-bsp-kernel.sh`
+itself FATALs if `--firmware` is written *after* `<outdir>` instead of
+before it, so that particular mistake never reaches this guard. A second,
+separate FATAL here covers an `Image` from which no embedded config can be
+read at all — truncated or corrupt. That one is *not* the `--firmware`
+question and rebuilding with `--firmware` will not fix it.)
 
 With that bundle in hand, and after Board bring-up's step 1
 (`stage-nfs-rootfs.sh`, below) has staged the NFS root, add the rebuilt
