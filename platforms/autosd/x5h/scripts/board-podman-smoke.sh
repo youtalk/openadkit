@@ -11,6 +11,17 @@
 # documented: a genuine tmpfs pass stamps TMPFS_STAMP below, and the btrfs
 # arm refuses to run without it. The tmpfs->btrfs interlock stamp is
 # unchanged by ext4loop.
+#
+# Tracing only. No `set -e` (failures are recorded in FAIL below so every run
+# reaches exactly one terminal SMOKE_<mode>_{PASS,FAIL} marker), and no
+# `set -o pipefail` -- the latter absence is load-bearing, not an oversight.
+# The `| grep -q ok` curl polls, the `| grep cap_net_raw` getcap check and
+# the `| tail -1` findmnt reads all want a pipeline's status to be the LAST
+# command's. Under pipefail an early-exiting `grep -q` SIGPIPEs curl, so the
+# guard returns 141 precisely when it MATCHES -- a guard that fails only when
+# it passes. That bug shipped once already on this branch
+# (stage-rebuilt-kernel.sh, fixed in db855a4). Do not add pipefail here
+# without rewriting every pipeline first.
 set -x
 T=/var/lib/autosd-test
 # Overridable for the off-board stub harness only; on the board the /run

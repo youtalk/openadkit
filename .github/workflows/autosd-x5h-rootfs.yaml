@@ -374,6 +374,17 @@ jobs:
         # files -- if it fires, that's a real finding to fail on, not
         # something to relax.
         run: |
+          # These `tar tf ... | grep -q` / `| head` guards are correct ONLY
+          # because this step runs under GitHub's default `bash -e {0}` with
+          # NO pipefail (there is no `shell:` or `defaults:` key anywhere in
+          # this file). grep -q exits on its first match while tar is still
+          # writing a multi-thousand-entry listing, so tar dies of SIGPIPE --
+          # under pipefail every one of these guards would return 141
+          # precisely when it MATCHES, i.e. fail exactly when it passes. That
+          # bug shipped once already on this branch (stage-rebuilt-kernel.sh,
+          # fixed in db855a4). The absence of pipefail here is load-bearing:
+          # do not add `set -o pipefail` to this step without rewriting all
+          # four pipelines first.
           cd platforms/autosd/x5h
           tar tf aib/x5h-rootfs.tar | head -50
           tar tf aib/x5h-rootfs.tar | grep -qE '(^|/)usr/bin/podman' || { echo "FATAL: no podman"; exit 1; }

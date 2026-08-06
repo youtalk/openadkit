@@ -10,6 +10,15 @@
 # (nftables port publish + outbound SNAT) and GATE7 (SELinux permissive)
 # are new. Gate numbers are stable identifiers, not a sequence: 5 is
 # deliberately not reused.
+#
+# There is deliberately NO `set -o pipefail` in this file, and its absence
+# is load-bearing. The `... | grep -q ...` guards below (captest_cap_ok's
+# getcap check, the curl polls) want a pipeline's status to be the LAST
+# command's. Under pipefail an early-exiting `grep -q` SIGPIPEs its
+# producer, so the guard returns 141 precisely when it MATCHES -- a guard
+# that fails only when it passes. That bug shipped once already on this
+# branch (stage-rebuilt-kernel.sh, fixed in db855a4). Do not "harden" this
+# script by adding pipefail without rewriting every pipeline first.
 T=/var/lib/autosd-test
 mkdir -p /var/lib/containers
 
