@@ -28,3 +28,16 @@ capture/
 
 # CodeChecker
 .codechecker/
+
+# X5H (R-Car Gen5) NDA working directories -- NEVER commit anything from these.
+# They hold Renesas R-Car xOS SDK material: rcar_gen5_mp_phy.bin, the
+# firmware-embedding Image-autosd built from it, board serial-session logs and
+# site-specific handoff notes. The hard NDA boundary for this platform is that
+# no blob, and no kernel image embedding one, ever reaches this repo, CI, CI
+# logs or CI artifacts (see platforms/autosd/x5h/README.md, "The firmware
+# split"). Ignoring them makes a reflexive `git add -A` mid board session
+# unable to stage an NDA binary, instead of relying on operator discipline.
+/x5h-work/
+/x5h/
+/CES2026/
+/tmux-x5h-*.log
