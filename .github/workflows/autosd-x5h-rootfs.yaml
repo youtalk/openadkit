@@ -119,23 +119,25 @@ jobs:
         run: df -h /
 
       - name: Install host tools
-        # podman and crun are installed only when ABSENT, because two
-        # container stacks coexist on this runner and apt supplies the wrong
-        # one. Measured on the Ubicloud arm64 runner image (2.336.0,
-        # 2026-08-06): the image ships a matched, modern pair in
-        # /usr/local/bin, outside dpkg -- podman 5.8.4 with crun 1.28, its
-        # systemd units in /usr/local/lib/systemd/system -- while
-        # `apt-get install podman crun` adds an OLDER pair in /usr/bin
-        # (podman 4.9.3+ds1-1ubuntu0.2, crun 1.14.1). sudo resolves binaries
-        # through secure_path, which lists /usr/local/bin before /usr/bin, so
-        # podman 5.8.4 is the one that actually runs. Pinning that podman to
-        # the dpkg-owned /usr/bin/crun therefore paired it with crun 1.14.1,
-        # whose supported OCI spec is 1.0.0, and crun rejected the newer
+        # podman and crun are installed together, as a PAIR, only when
+        # podman is itself absent, because two container stacks coexist on
+        # this runner and apt supplies the wrong one. Measured on the
+        # Ubicloud arm64 runner image (2.336.0, 2026-08-06): the image ships
+        # a matched, modern pair in /usr/local/bin, outside dpkg -- podman
+        # 5.8.4 with crun 1.28, its systemd units in
+        # /usr/local/lib/systemd/system -- while `apt-get install podman
+        # crun` adds an OLDER pair in /usr/bin (podman 4.9.3+ds1-1ubuntu0.2,
+        # crun 1.14.1). sudo resolves binaries through secure_path, which
+        # lists /usr/local/bin before /usr/bin, so podman 5.8.4 is the one
+        # that actually runs. Pinning that podman to the dpkg-owned
+        # /usr/bin/crun therefore paired it with crun 1.14.1, whose
+        # supported OCI spec is 1.0.0, and crun rejected the newer
         # ociVersion podman 5.8.4 writes into config.json: "OCI runtime
-        # error: crun: unknown version specified", exit 126. Installing only
-        # what is missing makes apt a no-op on an image that already ships
-        # both, matching the last known-green run (2026-08-04), while still
-        # covering an image that ships neither.
+        # error: crun: unknown version specified", exit 126. crun is
+        # therefore resolved below as a sibling of whichever podman sudo
+        # will actually run, never installed or pinned independently; if no
+        # sibling crun is found, no pin is applied at all rather than risk
+        # repeating that mismatch.
         run: |
           sudo apt-get update
           # skopeo/qemu/expect are unconditional. podman and crun are added
@@ -202,7 +204,7 @@ jobs:
             # strictly worse than not pinning at all, so remove any stale
             # drop-in and let podman pick its own runtime. Say so loudly:
             # this is not an expected state.
-            echo "WARNING: no crun beside ${PODMAN_BIN:-podman}; not pinning podman's OCI runtime" >&2
+            echo "::warning::no crun beside ${PODMAN_BIN:-podman}; not pinning podman's OCI runtime"
             sudo rm -f /etc/containers/containers.conf.d/10-openadkit-crun.conf
           fi
 
