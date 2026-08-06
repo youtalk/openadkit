@@ -32,7 +32,14 @@ FW_LINE='CONFIG_EXTRA_FIRMWARE="rcar_gen5_mp_phy.bin"'
 IKCFG="$("$BUNDLE/extract-ikconfig" "$BUNDLE/Image-autosd" || true)"
 [ -n "$IKCFG" ] \
     || { echo "FATAL: extract-ikconfig recovered no embedded config from $BUNDLE/Image-autosd -- the Image is truncated, corrupt, or was not built with CONFIG_IKCONFIG. This is NOT the --firmware question: rebuilding with --firmware will not fix it. Check the file's size/sha256 against provenance.txt first."; exit 1; }
-printf '%s\n' "$IKCFG" | grep -qxF "$FW_LINE" \
+# Herestring, NOT `printf ... | grep -qxF`: under this script's `set -o
+# pipefail`, `grep -q` exits the moment it matches, closing the pipe, and the
+# producing `printf` then dies of SIGPIPE and reports 141. pipefail takes that
+# rightmost non-zero status, so the pipeline "fails" precisely WHEN THE LINE IS
+# FOUND -- a perfectly inverted guard that refused every correct board bundle
+# (observed 2026-08-06, mid board session). A herestring has no pipe and no
+# second process, so grep's own status is the only one there is.
+grep -qxF "$FW_LINE" <<<"$IKCFG" \
     || { echo "FATAL: $BUNDLE/Image-autosd embeds a config, but not $FW_LINE (built without --firmware?) -- it cannot NFS-netboot"; exit 1; }
 # tar/depmod below used to rely on bare `set -e` with no labelled diagnostic,
 # unlike every other step in this file -- an operator mid-session reading a
