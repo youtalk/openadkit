@@ -125,6 +125,21 @@ jobs:
 
       - name: Put container storage on a non-overlay location (aib CI pattern)
         run: |
+          # The runner image can already have podman's overlay store mounted
+          # under /var/lib/containers by the time this step runs (observed on
+          # Ubicloud arm64 runner 2.336.0, 2026-08-06: apt now pulls in podman
+          # with its systemd units, and a mounted store makes the rm -rf below
+          # fail EBUSY). Show what is actually mounted first, stop podman so
+          # nothing keeps the store open, then unmount everything at or under
+          # both paths, deepest mount first so nested mounts come off before
+          # their parents. rm -rf below stays a hard gate: if a mount survives
+          # all that, it must still fail loudly rather than let the job carry
+          # on with container storage back on overlay.
+          findmnt -rno TARGET,SOURCE,FSTYPE | grep -E '/(var/lib|run)/containers' || true
+          sudo systemctl stop podman.socket podman.service || true
+          for m in $(findmnt -rno TARGET | grep -E '^/(var/lib|run)/containers($|/)' | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2- || true); do
+            sudo umount "$m" || true
+          done
           sudo rm -rf /var/lib/containers /run/containers
           sudo mkdir -p "$RUNNER_TEMP/_containers/var" "$RUNNER_TEMP/_containers/run" /var/lib/containers /run/containers
           sudo mount --bind "$RUNNER_TEMP/_containers/var" /var/lib/containers
