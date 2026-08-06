@@ -78,6 +78,14 @@ fi
 [ -n "${1:-}" ] || { echo "Usage: build-bsp-kernel.sh [--config-only|--toolchain-only] [--firmware <dir>] <outdir>"; exit 1; }
 OUT="$(mkdir -p "$1" && cd "$1" && pwd)"
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# Reproducible build: same source SHA + fragments + toolchain must yield
+# byte-identical artifacts on any machine, so "is this Image the same
+# lineage as the CI one?" is a sha256 comparison, not artifact forensics.
+# Timestamp = the pinned source commit's committer date.
+export KBUILD_BUILD_TIMESTAMP="2026-04-23T08:07:21Z"
+export KBUILD_BUILD_USER=openadkit
+export KBUILD_BUILD_HOST=x5h
 # Pinned commit of renesas-rcar/linux-bsp branch v6.1.102/rcar-6.0.0.rc12
 # (carries r8a78000/Ironhide: the X5H). The ref is a mutable BRANCH — never
 # build from the branch name. Move this SHA only deliberately, and re-run
@@ -136,7 +144,18 @@ make INSTALL_MOD_PATH="$OUT/modstage" INSTALL_MOD_STRIP=1 modules_install
 # Drop the build/source symlinks (they point into this throwaway tree); the
 # board and the gate want only the module tree itself.
 rm -f "$OUT/modstage/lib/modules/$KVER/build" "$OUT/modstage/lib/modules/$KVER/source"
-tar -C "$OUT/modstage" -cf "$OUT/modules-$KVER.tar" "lib/modules/$KVER"
+tar --sort=name --owner=0 --group=0 --numeric-owner \
+    --mtime="$KBUILD_BUILD_TIMESTAMP" \
+    -C "$OUT/modstage" -cf "$OUT/modules-$KVER.tar" "lib/modules/$KVER"
 rm -rf "$OUT/modstage"
+# extract-ikconfig lets the staging host read the embedded config out of
+# any Image without a kernel checkout (stage-rebuilt-kernel.sh uses it to
+# refuse fw-less images).
+install -m 0755 scripts/extract-ikconfig "$OUT/extract-ikconfig"
+{
+  echo "toolchain=$("${CROSS_COMPILE}gcc" --version | head -1)"
+  grep '^CONFIG_EXTRA_FIRMWARE' .config
+  (cd "$OUT" && sha256sum Image-autosd r8a78000-ironhide-uio-autosd.dtb "modules-$KVER.tar")
+} > "$OUT/provenance.txt"
 ls -lh "$OUT/Image-autosd" "$OUT/r8a78000-ironhide-uio-autosd.dtb" "$OUT/modules-$KVER.tar"
 echo "OK: $KVER"
