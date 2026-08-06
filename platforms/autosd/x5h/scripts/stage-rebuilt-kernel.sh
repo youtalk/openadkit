@@ -24,8 +24,16 @@ KVER="$(cat "$BUNDLE/kernelrelease.txt")"
 FW_LINE='CONFIG_EXTRA_FIRMWARE="rcar_gen5_mp_phy.bin"'
 [ -x "$BUNDLE/extract-ikconfig" ] \
     || { echo "FATAL: $BUNDLE/extract-ikconfig missing (rebuild with the current build-bsp-kernel.sh)"; exit 1; }
-"$BUNDLE/extract-ikconfig" "$BUNDLE/Image-autosd" | grep -qxF "$FW_LINE" \
-    || { echo "FATAL: $BUNDLE/Image-autosd does not embed mp_phy firmware (built without --firmware?) -- it cannot NFS-netboot"; exit 1; }
+# Two distinct failures, two distinct diagnostics. "No config at all" means a
+# truncated/corrupt Image (or one built without CONFIG_IKCONFIG) -- reporting
+# that as "built without --firmware?" would send the operator into a wrong
+# 40-minute rebuild mid session, so separate the cases before judging the
+# firmware line.
+IKCFG="$("$BUNDLE/extract-ikconfig" "$BUNDLE/Image-autosd" 2>/dev/null || true)"
+[ -n "$IKCFG" ] \
+    || { echo "FATAL: extract-ikconfig recovered no embedded config from $BUNDLE/Image-autosd -- the Image is truncated, corrupt, or was not built with CONFIG_IKCONFIG. This is NOT the --firmware question: rebuilding with --firmware will not fix it. Check the file's size/sha256 against provenance.txt first."; exit 1; }
+printf '%s\n' "$IKCFG" | grep -qxF "$FW_LINE" \
+    || { echo "FATAL: $BUNDLE/Image-autosd embeds a config, but not $FW_LINE (built without --firmware?) -- it cannot NFS-netboot"; exit 1; }
 # tar/depmod below used to rely on bare `set -e` with no labelled diagnostic,
 # unlike every other step in this file -- an operator mid-session reading a
 # bare "tar: ..." or silent depmod exit deserves the same FATAL: triage cue

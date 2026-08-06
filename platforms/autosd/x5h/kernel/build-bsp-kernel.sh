@@ -43,6 +43,16 @@ TOOLCHAIN_DIRNAME=arm-gnu-toolchain-13.2.Rel1-x86_64-aarch64-none-linux-gnu
 TOOLCHAIN_ID="Arm GNU Toolchain 13.2.rel1"
 TOOLDIR="${X5H_TOOLCHAIN_DIR:-$HOME/.cache/x5h-toolchain}"
 
+# Pin the umask before anything is created. modules_install installs with a
+# bare `mkdir -p` + `cp` and no explicit mode (scripts/Makefile.modinst's
+# cmd_install), so the module tree's permission bits -- and therefore the
+# permission bytes inside modules-<kver>.tar -- follow the BUILDING
+# machine's umask: 002 on this dev host, 022 on the GitHub/Ubicloud
+# runners, which alone would make the tar differ across machines no matter
+# what --sort/--owner/--group/--mtime do. 022 is the runner default, so
+# pinning to it keeps CI's own artifacts unchanged.
+umask 022
+
 CONFIG_ONLY= TOOLCHAIN_ONLY= FWDIR=
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -54,6 +64,13 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
+# The loop stops at the first non-flag word, so any flag written AFTER the
+# positional <outdir> would otherwise be dropped in silence -- e.g.
+# `build-bsp-kernel.sh ~/kernel-fw --firmware ~/fw` would quietly build a
+# FIRMWARE-LESS image into a directory named for a board build, and only the
+# staging guard would catch it, 30-60 minutes and one wasted rebuild later.
+[ $# -le 1 ] \
+  || { echo "FATAL: unexpected argument(s) after <outdir>: ${*:2} -- every flag must precede <outdir>"; exit 1; }
 
 export ARCH=arm64
 export CROSS_COMPILE="$TOOLDIR/$TOOLCHAIN_DIRNAME/bin/aarch64-none-linux-gnu-"
@@ -63,8 +80,18 @@ fetch_toolchain() {
     [ "$(uname -m)" = x86_64 ] \
       || { echo "FATAL: pinned toolchain is x86_64-hosted; host is $(uname -m)"; exit 1; }
     mkdir -p "$TOOLDIR"
-    [ -f "$TOOLDIR/$TOOLCHAIN_NAME.tar.xz" ] \
-      || curl -fL "$TOOLCHAIN_URL" -o "$TOOLDIR/$TOOLCHAIN_NAME.tar.xz"
+    # Download to a scratch name and rename only on success. A partial
+    # download left at the final path would satisfy the -f test on the next
+    # run, so an interrupted fetch would come back as a sha256 FATAL that
+    # blames verification instead of the truncated cache. In CI it is worse:
+    # actions/cache saves its path even when the job fails, so one truncated
+    # tarball would persist under the key and wedge every later run until the
+    # key was bumped. The sha256 check below stays the authority on
+    # integrity; this only stops junk from being mistaken for a cache hit.
+    if [ ! -f "$TOOLDIR/$TOOLCHAIN_NAME.tar.xz" ]; then
+      curl -fL "$TOOLCHAIN_URL" -o "$TOOLDIR/$TOOLCHAIN_NAME.tar.xz.part"
+      mv -f "$TOOLDIR/$TOOLCHAIN_NAME.tar.xz.part" "$TOOLDIR/$TOOLCHAIN_NAME.tar.xz"
+    fi
     echo "$TOOLCHAIN_SHA256  $TOOLDIR/$TOOLCHAIN_NAME.tar.xz" | sha256sum -c - \
       || { echo "FATAL: toolchain tarball failed sha256 verification"; exit 1; }
     # Keep the tarball after extraction: CI caches the tarball, not the tree.
@@ -182,8 +209,30 @@ make INSTALL_MOD_PATH="$OUT/modstage" INSTALL_MOD_STRIP=1 modules_install
 # Drop the build/source symlinks (they point into this throwaway tree); the
 # board and the gate want only the module tree itself.
 rm -f "$OUT/modstage/lib/modules/$KVER/build" "$OUT/modstage/lib/modules/$KVER/source"
+# The depmod-generated index files are deliberately EXCLUDED. modules_install
+# runs the BUILDING machine's depmod, so their bytes track the host's kmod
+# version rather than the kernel -- the last thing standing between this tar
+# and byte-identity across machines once umask is pinned. Both consumers run
+# `depmod -b <root> <kver>` immediately after extracting and then assert
+# modules.dep exists (scripts/stage-rebuilt-kernel.sh for the board's NFS
+# root, scripts/inject-test-images.sh for the gate's ext4 export), so the
+# index is always rebuilt where it is used; anything added that extracts this
+# tar must do the same or modprobe will fail. modules.order,
+# modules.builtin and modules.builtin.modinfo are NOT excluded: depmod READS
+# them, and they come from the build itself, so they are already
+# deterministic.
 tar --sort=name --owner=0 --group=0 --numeric-owner \
     --mtime="$KBUILD_BUILD_TIMESTAMP" \
+    --exclude="lib/modules/$KVER/modules.alias" \
+    --exclude="lib/modules/$KVER/modules.alias.bin" \
+    --exclude="lib/modules/$KVER/modules.builtin.alias.bin" \
+    --exclude="lib/modules/$KVER/modules.builtin.bin" \
+    --exclude="lib/modules/$KVER/modules.dep" \
+    --exclude="lib/modules/$KVER/modules.dep.bin" \
+    --exclude="lib/modules/$KVER/modules.devname" \
+    --exclude="lib/modules/$KVER/modules.softdep" \
+    --exclude="lib/modules/$KVER/modules.symbols" \
+    --exclude="lib/modules/$KVER/modules.symbols.bin" \
     -C "$OUT/modstage" -cf "$OUT/modules-$KVER.tar" "lib/modules/$KVER"
 rm -rf "$OUT/modstage"
 # extract-ikconfig lets the staging host read the embedded config out of
