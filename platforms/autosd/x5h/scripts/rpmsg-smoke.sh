@@ -12,7 +12,7 @@
 set -u
 
 FW=rpmsg-echo-cr52.elf
-SERVICE=rpmsg-openamp-demo-channel
+SERVICE=rpmsg-client-sample
 MSGS=100
 CYCLES=3
 CHECK=0
