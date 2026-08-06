@@ -16,6 +16,16 @@ KVER="$(cat "$BUNDLE/kernelrelease.txt")"
 [ -f "$BUNDLE/r8a78000-ironhide-uio-autosd.dtb" ] \
     || { echo "FATAL: $BUNDLE/r8a78000-ironhide-uio-autosd.dtb not found"; exit 1; }
 [ -f "$BUNDLE/modules-$KVER.tar" ] || { echo "FATAL: $BUNDLE/modules-$KVER.tar not found"; exit 1; }
+# The gate image and the board image share the filename Image-autosd; the
+# only way to tell them apart is the embedded config. A fw-less image
+# cannot NFS-netboot (MP-PHY probe fails -> rswitch defers forever -> no
+# TSN link -> VFS panic) -- the exact 695106c failure mode -- so refuse it
+# here, before anything reaches TFTP.
+FW_LINE='CONFIG_EXTRA_FIRMWARE="rcar_gen5_mp_phy.bin"'
+[ -x "$BUNDLE/extract-ikconfig" ] \
+    || { echo "FATAL: $BUNDLE/extract-ikconfig missing (rebuild with the current build-bsp-kernel.sh)"; exit 1; }
+"$BUNDLE/extract-ikconfig" "$BUNDLE/Image-autosd" | grep -qxF "$FW_LINE" \
+    || { echo "FATAL: $BUNDLE/Image-autosd does not embed mp_phy firmware (built without --firmware?) -- it cannot NFS-netboot"; exit 1; }
 # tar/depmod below used to rely on bare `set -e` with no labelled diagnostic,
 # unlike every other step in this file -- an operator mid-session reading a
 # bare "tar: ..." or silent depmod exit deserves the same FATAL: triage cue
