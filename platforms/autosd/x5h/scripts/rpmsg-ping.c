@@ -5,7 +5,8 @@
  * Scans /sys/bus/rpmsg/devices for the device whose `name` matches -s,
  * reads its announced `dst` address, creates a char endpoint through
  * /dev/rpmsg_ctrl*, then write()s sequenced payloads and verifies each
- * echo byte-for-byte. Static-linked so the same binary runs on both the
+ * echo's leading bytes match what was sent (a prefix compare, not a
+ * full-length match). Static-linked so the same binary runs on both the
  * BSP Yocto rootfs and the AutoSD NFS rootfs.
  *
  * Exit 0 + "RPMSG_PING_PASS n=<count>" on success; exit 1 + a
@@ -141,7 +142,8 @@ int main(int argc, char **argv)
 	}
 	ctrl = open_ctrl();
 	if (ctrl < 0) {
-		printf("RPMSG_PING_FAIL reason=no_rpmsg_ctrl (modprobe rpmsg_ctrl rpmsg_char?)\n");
+		printf("RPMSG_PING_FAIL reason=no_rpmsg_ctrl\n");
+		fprintf(stderr, "hint: modprobe rpmsg_ctrl rpmsg_char?\n");
 		return 1;
 	}
 	memset(&info, 0, sizeof(info));
@@ -183,7 +185,7 @@ int main(int argc, char **argv)
 		}
 		if (pfd.revents & (POLLERR | POLLHUP)) {
 			printf("RPMSG_PING_FAIL reason=channel_closed seq=%d revents=0x%x\n",
-			       i, pfd.revents);
+			       i, (unsigned int)pfd.revents);
 			goto fail;
 		}
 		memset(rx, 0, sizeof(rx));
