@@ -19,12 +19,24 @@ CHECK=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        -f|-s|-n|-c)
+            [ $# -ge 2 ] || {
+                echo "RPMSG_SMOKE_FAIL cycle=0 reason=bad_args"
+                exit 1
+            }
+            ;;
+    esac
+    case "$1" in
         -f) FW=$2; shift 2 ;;
         -s) SERVICE=$2; shift 2 ;;
         -n) MSGS=$2; shift 2 ;;
         -c) CYCLES=$2; shift 2 ;;
         --check) CHECK=1; shift ;;
-        *) echo "usage: $0 [-f fw] [-s service] [-n msgs] [-c cycles] [--check]"; exit 2 ;;
+        *)
+            echo "RPMSG_SMOKE_FAIL cycle=0 reason=bad_args"
+            echo "usage: $0 [-f fw] [-s service] [-n msgs] [-c cycles] [--check]"
+            exit 2
+            ;;
     esac
 done
 
@@ -34,11 +46,13 @@ done
 # checked before the hardware probe below and fires the same way regardless
 # of board state.
 case "$CYCLES" in
-    ''|*[!0-9]*|0) echo "RPMSG_SMOKE_FAIL cycle=0 reason=bad_cycles"; exit 1 ;;
+    ''|*[!0-9]*) echo "RPMSG_SMOKE_FAIL cycle=0 reason=bad_cycles"; exit 1 ;;
 esac
+[ "$CYCLES" -ge 1 ] || { echo "RPMSG_SMOKE_FAIL cycle=0 reason=bad_cycles"; exit 1; }
 case "$MSGS" in
-    ''|*[!0-9]*|0) echo "RPMSG_SMOKE_FAIL cycle=0 reason=bad_msgs"; exit 1 ;;
+    ''|*[!0-9]*) echo "RPMSG_SMOKE_FAIL cycle=0 reason=bad_msgs"; exit 1 ;;
 esac
+[ "$MSGS" -ge 1 ] || { echo "RPMSG_SMOKE_FAIL cycle=0 reason=bad_msgs"; exit 1; }
 
 # rpmsg-ping next to this script wins; else rely on PATH.
 HERE=$(dirname "$0")
@@ -62,8 +76,27 @@ echo "INFO rproc=$RPROC name=$(cat "$RPROC/name") state=$(cat "$RPROC/state")"
 if [ "$CHECK" = 1 ]; then
     echo "INFO firmware=$(cat "$RPROC/firmware")"
     echo "INFO rpmsg devices:"
-    ls /sys/bus/rpmsg/devices/ 2>/dev/null || echo "  (none)"
+    if [ -n "$(ls -A /sys/bus/rpmsg/devices/ 2>/dev/null)" ]; then
+        ls /sys/bus/rpmsg/devices/
+    else
+        echo "  (none)"
+    fi
     echo "INFO modules: $(lsmod 2>/dev/null | grep -cE 'rpmsg_(char|ctrl)') rpmsg char/ctrl loaded"
+    if [ -e "/lib/firmware/$FW" ]; then
+        echo "INFO fw_staged=yes fw=/lib/firmware/$FW"
+    else
+        echo "INFO fw_staged=no fw=/lib/firmware/$FW"
+    fi
+    if command -v "$PING" >/dev/null 2>&1; then
+        echo "INFO ping=$PING"
+    else
+        echo "INFO ping=missing (expected next to this script or on PATH)"
+    fi
+    if lsmod 2>/dev/null | grep -q '^rpmsg_client_sample'; then
+        echo "INFO rpmsg_client_sample=loaded (will contend for the channel; see Notes)"
+    else
+        echo "INFO rpmsg_client_sample=not_loaded"
+    fi
     echo "RPMSG_SMOKE_CHECK_DONE"
     exit 0
 fi
@@ -99,9 +132,9 @@ wait_service() {  # $1=timeout_s
 i=1
 while [ "$i" -le "$CYCLES" ]; do
     if [ "$(cat "$RPROC/state")" != "offline" ]; then
-        echo stop > "$RPROC/state" 2>/dev/null
+        echo stop > "$RPROC/state"
         wait_state offline 10 || {
-            echo "RPMSG_SMOKE_FAIL cycle=$i reason=cannot_reach_offline"
+            echo "RPMSG_SMOKE_FAIL cycle=$i reason=cannot_reach_offline state=$(cat "$RPROC/state")"
             exit 1
         }
     fi
@@ -119,16 +152,17 @@ while [ "$i" -le "$CYCLES" ]; do
     }
     wait_state running 10 || {
         echo "RPMSG_SMOKE_FAIL cycle=$i reason=not_running state=$(cat "$RPROC/state")"
+        echo stop > "$RPROC/state"
         exit 1
     }
     wait_service 15 || {
         echo "RPMSG_SMOKE_FAIL cycle=$i reason=service_timeout service=$SERVICE"
-        echo stop > "$RPROC/state" 2>/dev/null
+        echo stop > "$RPROC/state"
         exit 1
     }
     "$PING" -s "$SERVICE" -n "$MSGS" || {
         echo "RPMSG_SMOKE_FAIL cycle=$i reason=ping"
-        echo stop > "$RPROC/state" 2>/dev/null
+        echo stop > "$RPROC/state"
         exit 1
     }
     echo stop > "$RPROC/state"
