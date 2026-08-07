@@ -14,6 +14,12 @@ content:
     - iproute
     - procps-ng
     - iptables-nft
+    # The base AutoSD image ships no SSH server at all (only crypto-policies
+    # fragments mention openssh), so without this the sshd drop-in, the baked
+    # authorized_keys and the "enable sshd.service" preset below all describe
+    # a service that cannot exist. Board-verified 2026-08-07: no /usr/sbin/sshd
+    # and no sshd.service unit in the built rootfs.
+    - openssh-server
   # add_files (org.osbuild.copy) does not create parent directories, and
   # nothing else in the pipeline creates /etc/containers/containers.conf.d
   # (init_rootfs_dirs_stage creates /etc itself, but not this subtree).
