@@ -12,7 +12,8 @@ see "One build, two images" below) — so every container-runtime question is
 answered before board time.
 
 - [CR52 dual boot + RPMsg](rpmsg-dualboot.md) — run FreeRTOS on the
-  realtime core under AutoSD, loaded at runtime via remoteproc.
+  realtime core under AutoSD; remoteproc `start` publishes RPMsg state to
+  a CR52 that is already executing, it does not load or release it.
 
 ## Folder Structure
 
