@@ -32,7 +32,7 @@ enforced — twice, independently: in the Tailscale ACL, and in a firewall
 that scopes each service to an interface.
 
 ```mermaid
-flowchart LR
+flowchart TB
   subgraph TAILNET["Tailnet — WireGuard mesh, GitHub-backed identity"]
     direction LR
     ADMIN["Administrator<br/>group:x5h-admin"]
