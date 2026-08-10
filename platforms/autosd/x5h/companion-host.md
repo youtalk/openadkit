@@ -31,6 +31,61 @@ with external developers. The companion is where that separation is
 enforced — twice, independently: in the Tailscale ACL, and in a firewall
 that scopes each service to an interface.
 
+```mermaid
+flowchart LR
+  subgraph TAILNET["Tailnet — WireGuard mesh, GitHub-backed identity"]
+    direction LR
+    ADMIN["Administrator<br/>group:x5h-admin"]
+    DEV["Internal developer<br/>group:x5h-dev (optional middle tier)"]
+    EXT["Contractor<br/>group:x5h-ext / tag:x5h-ext"]
+  end
+
+  ACL{{"Enforcement 1 — Tailscale ACL grants<br/>identity decides who"}}
+
+  ADMIN -- "dst: * — the whole tailnet" --> ACL
+  DEV -- "board :22 + gateway :22" --> ACL
+  EXT -- "board :22 only" --> ACL
+
+  subgraph COMPANION["Companion host — always-on bench gateway"]
+    direction TB
+    TS0["tailscale0<br/>subnet router → 192.168.0.0/24<br/>every Linux node needs --accept-routes"]
+    NFT{{"Enforcement 2 — nftables inet x5h<br/>input policy drop; interface decides from where"}}
+    SERIAL["Serial consoles<br/>tio + tmux, /dev/ttyUSB*<br/>APU + CR52"]
+    BIF["bench NIC 192.168.0.1/24<br/>never-default, ignore-carrier"]
+    RESCUE["Rescue services<br/>tftpd :69 · NFSv3 /export/rfs*<br/>rpc.mountd :20048 pinned"]
+    UPLINK["uplink NIC<br/>masquerade for the bench"]
+    TS0 --> NFT
+    NFT -- "ssh :22" --> SERIAL
+    NFT -- "forward tailscale0 → bench" --> BIF
+    NFT -. "denied — reached tailscale0, not the bench NIC" .-> RESCUE
+    BIF --> UPLINK
+  end
+
+  ACL == "permitted flows only" ==> TS0
+
+  subgraph BENCH["Bench LAN 192.168.0.0/24 — unauthenticated services live only here"]
+    direction TB
+    BOARD["R-Car X5H — tsn5 192.168.0.20<br/>AutoSD self-boot from UFS<br/>sshd key-only, everyone lands as root"]
+    CR52["CR52 realtime core<br/>firmware slot on UFS, written from Linux<br/>reboot = PSCI cold reset, restarts it too"]
+    BOARD --- CR52
+  end
+
+  BIF -- "ssh root@192.168.0.20" --> BOARD
+  SERIAL -- "USB serial — the only way back when the PHY wedges" --> BOARD
+  RESCUE -- "TFTP kernel/dtb + NFS root (rescue boot only)" --> BOARD
+  UPLINK -- "container pulls, DNS 1.1.1.1 / 8.8.8.8" --> NET(["Internet"])
+
+  classDef tier fill:#e8f0fe,stroke:#4285f4,color:#111
+  classDef gate fill:#fff4e5,stroke:#e8a33d,color:#111
+  classDef host fill:#f3f3f3,stroke:#888,color:#111
+  classDef board fill:#e6f4ea,stroke:#34a853,color:#111
+  class ADMIN,DEV,EXT tier
+  class ACL,NFT gate
+  class TS0,SERIAL,BIF,RESCUE,UPLINK host
+  class BOARD,CR52 board
+  linkStyle 6 stroke:#d93025,stroke-width:2px,color:#d93025
+```
+
 The serial consoles turn out to matter more than "something has to hold
 them" suggests. There is a real failure mode in which the board is booted
 and healthy but has no working network, and reports its interface as up
@@ -346,6 +401,75 @@ down with it.
 Administrators get the whole bench. External developers get the board's
 SSH port and nothing else — not the companion, not TFTP, not NFS.
 
+```mermaid
+flowchart LR
+  EXT["Contractor<br/>group:x5h-ext, tag:x5h-ext<br/>grant: board only, tcp:22"]
+  DEV["Internal developer<br/>group:x5h-dev (optional middle tier)<br/>grant: board + gateway, tcp:22"]
+  ADMIN["Administrator<br/>group:x5h-admin<br/>grant: dst * , ip *"]
+
+  subgraph Z0["Zone 0 — no tier reaches this over the tailnet"]
+    RESCUE["tftpd :69 · NFSv3 · rpc.mountd :20048<br/>nftables accepts these on the bench NIC only"]
+  end
+
+  subgraph Z3["Zone 3 — administrator only"]
+    REST["Board ports other than 22<br/>and the companion's other services"]
+    TAILNET["Every other machine on the tailnet<br/>this is why the admin grant must stay dst:*"]
+    CONSOLE["Tailscale admin console<br/>ACL edits, route approval, onboarding<br/>not gated by ACLs — always the way back"]
+  end
+
+  subgraph Z2["Zone 2 — administrator + internal developer"]
+    GW["Companion sshd, tcp/22<br/>serial consoles (tio + tmux)<br/>the only way back when the PHY wedges"]
+  end
+
+  subgraph Z1["Zone 1 — all three tiers"]
+    BOARD["X5H board, tcp/22 only<br/>192.168.0.20 · root by key<br/>reboot, build, run, CR52 slot update"]
+  end
+
+  ADMIN ==> BOARD
+  ADMIN ==> GW
+  ADMIN ==> REST
+  ADMIN ==> TAILNET
+  ADMIN ==> CONSOLE
+  DEV ==> BOARD
+  DEV ==> GW
+  DEV -. "no grant" .-> REST
+  EXT ==> BOARD
+  EXT -. "refused — verified from a real tag:x5h-ext node" .-> GW
+  EXT -. "refused — board's other ports too" .-> REST
+  ADMIN -. "ACL allows it, nftables still drops it<br/>interface decides, not address<br/>reach it by ssh to the companion first" .-> RESCUE
+
+  classDef admin fill:#e8f0fe,stroke:#1a73e8,stroke-width:2px,color:#111
+  classDef dev fill:#e6f4ea,stroke:#188038,stroke-width:2px,color:#111
+  classDef ext fill:#fef7e0,stroke:#b06000,stroke-width:2px,color:#111
+  classDef target fill:#f8f9fa,stroke:#5f6368,color:#111
+  classDef blocked fill:#fce8e6,stroke:#d93025,color:#111
+  class ADMIN admin
+  class DEV dev
+  class EXT ext
+  class BOARD,GW,REST,TAILNET,CONSOLE target
+  class RESCUE blocked
+
+  linkStyle 0,1,2,3,4 stroke:#1a73e8,stroke-width:2px,color:#1a73e8
+  linkStyle 5,6 stroke:#188038,stroke-width:2px,color:#188038
+  linkStyle 7 stroke:#9aa0a6,stroke-width:1px,color:#9aa0a6
+  linkStyle 8 stroke:#b06000,stroke-width:2px,color:#b06000
+  linkStyle 9,10 stroke:#d93025,stroke-width:1.5px,color:#d93025
+  linkStyle 11 stroke:#d93025,stroke-width:1.5px,color:#d93025
+```
+
+Zone 0 is the one worth staring at: **not even the administrator's `dst: *`
+reaches TFTP, NFS or mountd over the tailnet**, because the firewall matches
+on the interface a packet arrived on rather than on its address. The
+administrator gets at those services by opening an SSH session to the
+companion first. That is what makes a mistake in the ACL survivable.
+
+The middle tier is optional. Two tiers are enough if everyone who is not
+external is an administrator; add `group:x5h-dev` when someone needs the
+serial consoles — which is to say, needs to recover a board whose network
+has wedged — without getting the rest of the tailnet. The bench services
+stay out of reach at either setting, since Zone 0 is enforced by the
+firewall and not by identity.
+
 Read the current policy before writing anything. **The policy file replaces
 the tailnet's defaults rather than adding to them**, so a merge that only
 adds the x5h rules removes the default "allow all your own devices" grant
@@ -361,6 +485,10 @@ along the way. Match the syntax already in the file: newer tailnets use
     // rule that grants nothing.
     "group:x5h-admin": ["<admin-login>"],
     "group:x5h-ext":   [],   // external developer logins land here
+    // Optional middle tier: internal developers who need the board and the
+    // gateway's serial consoles, but not the rest of the tailnet. Omit the
+    // group and its grant below if two tiers are enough.
+    "group:x5h-dev":   [],
   },
   "tagOwners": {
     "tag:x5h-gw":  ["autogroup:admin"],
@@ -371,6 +499,10 @@ along the way. Match the syntax already in the file: newer tailnets use
     // gateway and the bench subnet: with the default allow-all grant removed,
     // that is what cuts you off from every other machine on your own tailnet.
     {"src": ["group:x5h-admin"], "dst": ["*"], "ip": ["*"]},
+    // Optional internal tier: the board plus the gateway's SSH, so they can
+    // drive the serial consoles. Name the gateway by its tag; if it is not
+    // tagged, use its node name instead.
+    {"src": ["group:x5h-dev"], "dst": ["192.168.0.20", "tag:x5h-gw"], "ip": ["tcp:22"]},
     // External tier. In grants syntax the port restriction lives in "ip",
     // not appended to "dst".
     {"src": ["group:x5h-ext", "tag:x5h-ext"], "dst": ["192.168.0.20"], "ip": ["tcp:22"]},
