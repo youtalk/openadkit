@@ -22,7 +22,7 @@ answered before board time.
   tool and a trip to the board.
 - [Companion host](companion-host.md) — always-on bench gateway that keeps
   the board reachable remotely and scopes external developers' access.
-  *Designed, not yet executed.*
+  Executed and verified on hardware, 2026-08-10.
 
 ## Folder Structure
 
