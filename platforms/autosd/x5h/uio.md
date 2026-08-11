@@ -98,11 +98,17 @@ still missing, and none of them is fixed by this drop-in:
   but has no NPU node — only the NPU's SMMUs, disabled. The vendor SDK's own
   UIO device-tree source does describe the NPU blocks as `generic-uio`; those
   values are SDK material and stay out of this repository.
-- **`/dev/cmem_other*`** — the contiguous-memory devices the runtime opens.
-  No such driver exists in the pinned kernel source or in the image's module
-  tree.
-- **`/dev/npuc*`** — the runtime opens these, and no `linux,uio-name` in the
-  vendor source produces that name, so something else supplies them.
+- **`/dev/cmem_other*`** — the contiguous-memory devices the runtime opens
+  are served by an out-of-tree Renesas module, loaded once per boot. It is
+  absent from the pinned kernel source and from this image's module tree, and
+  the vendor ships it built against their own kernel release, so it cannot
+  simply be copied across.
+- **`/dev/npuc*`** — these are UIO devices, named the same way as every
+  device in the table above: the vendor's NPU device tree declares them
+  `generic-uio` with a `linux,uio-name`, and the userspace side selects their
+  register windows by `mmap` offsets that are multiples of the page size,
+  which is the UIO map-selection convention. So the drop-in here is the
+  mechanism the NPU will use; what is missing is only the nodes.
 
 ## Related
 
