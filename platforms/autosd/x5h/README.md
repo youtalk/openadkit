@@ -35,6 +35,9 @@ answered before board time.
 - [Companion host](companion-host.md) — always-on bench gateway that keeps
   the board reachable remotely and scopes external developers' access.
   Executed and verified on hardware, 2026-08-10.
+- [UIO](uio.md) — hand the SoC's accelerator blocks to userspace; why
+  `uio_pdrv_genirq` comes up loaded and bound to nothing without an `of_id`,
+  and what the NPU still needs beyond it.
 
 ## Folder Structure
 
@@ -43,7 +46,8 @@ answered before board time.
   or staged alongside the rebuilt kernel (`60-nftables.conf`), plus the
   self-boot set: key-only sshd drop-in, `authorized_keys`, the
   NetworkManager drop-in keeping `tsn5` kernel-managed, static resolvers,
-  the rpmsg sample-driver blacklist and the sshd enable preset
+  the rpmsg sample-driver blacklist, the `uio_pdrv_genirq` `of_id` binding
+  (see [uio.md](uio.md)) and the sshd enable preset
 - `kernel/`: rebuilt-kernel config fragments + build script, shared by the
   QEMU gate and the board — one build, two images: both boot an
   `Image-autosd` from the same source SHA, toolchain and fragments, and the

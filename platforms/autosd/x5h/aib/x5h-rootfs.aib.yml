@@ -82,6 +82,9 @@ content:
       path: /etc/resolv.conf
     - source_path: ../config/x5h-rpmsg-diag.conf
       path: /etc/modprobe.d/x5h-rpmsg-diag.conf
+    # Without of_id, uio_pdrv_genirq loads but binds nothing -- see uio.md.
+    - source_path: ../config/x5h-uio.conf
+      path: /etc/modprobe.d/x5h-uio.conf
     - source_path: ../config/80-x5h.preset
       path: /etc/systemd/system-preset/80-x5h.preset
 
