@@ -4,11 +4,13 @@ What has to be true before the ONNX Runtime Renesas execution provider can
 reach the NPU from AutoSD, in what order to do it, and how to get back if a
 step goes wrong.
 
-> **Status: investigated on hardware 2026-08-10, not yet executed.** Every
-> "already true" claim below was measured on the board; everything under
-> Stage 1 and Stage 2 is designed and untried. The measurements are what make
-> the sequencing safe to trust, so they are stated as measurements rather
-> than as background.
+> **Status: Stage 0 executed 2026-08-10. Stage 1 started, then stopped.** The
+> driver build is done and verified on the board. The device-tree step is not,
+> and is now blocked on a question put to the vendor: the NPU's own allocation
+> map and this branch's realtime reserved regions do not merely collide, they
+> appear to be mutually exclusive. See [Where this stops](#where-this-stops).
+> Everything stated below as measured was measured on the board; Stage 2
+> remains designed and untried.
 
 > **Numbers live elsewhere.** Flash offsets, device-tree addresses and
 > interrupt numbers come from the vendor SDK and are not in this repository —
@@ -26,11 +28,26 @@ two families of device:
   `linux,uio-name`, and the userspace side picks their register windows with
   `mmap` offsets that are multiples of the page size, which is the UIO map
   convention. See [uio.md](uio.md).
+
+  **But those are not the names the kernel creates.** UIO names its device
+  nodes `/dev/uioN` by probe order and puts the declared name in
+  `/sys/class/uio/uioN/name`. Turning that name into `/dev/npuc0` takes a
+  one-line udev rule: match `SUBSYSTEM=="uio"` and symlink `$attr{name}`. The
+  same rule is also what makes the node openable by anything but root, since
+  UIO creates its devices `0600 root:root`. `config/51-x5h-uio.rules` supplies
+  it, verified on hardware 2026-08-11.
 - **`/dev/cmem_other*`** — contiguous memory, served by an out-of-tree driver
-  that has to be loaded once per boot.
+  that has to be loaded once per boot. Its devices want a rule of their own,
+  for the same permission reason: `config/52-x5h-cmem.rules`.
 
 So there is no NPU kernel driver to find or write. What is missing is device
-tree, one module, and possibly one firmware component.
+tree, and possibly one firmware component. The module and both udev rules are
+done.
+
+The naming rules were the easiest of those to overlook, because nothing about a
+missing symlink points at udev. The device tree is right, the module is
+loaded, the UIO device is bound and named — and the runtime still fails at
+`open`, on a path that looks like it should exist.
 
 ## What the board already has
 
@@ -57,52 +74,219 @@ rather than to assume either way.
 
 ## Stage 0: capture what you would otherwise lose
 
-Do this before anything else, and keep the results off the board.
+Do this before anything else, and keep the results off the board. **Executed
+2026-08-10**, so what follows is a record as much as an instruction.
 
-- Read the whole extent of both realtime firmware slots to files. Stage 2
-  writes into the same address space, and one of these slots holds this
-  branch's RPMsg responder — see the trap below.
-- Read the current contents of the flash region Stage 2 would rewrite, so a
-  restore is a copy rather than a rebuild.
-- Dump the U-Boot environment over serial with `printenv`. Self-boot can also
-  be restored from `selfboot-env.txt` on the boot partition with no host at
-  all ([selfboot.md](selfboot.md)), so this is belt and braces.
+- Read both realtime firmware slots. Stage 2 writes into the same address
+  space, and one of these slots holds this branch's RPMsg responder — see the
+  trap below.
+- Read the flash region Stage 2 would rewrite, so a restore is a copy rather
+  than a rebuild.
+- Capture the U-Boot environment.
+
+**Take whole-device images, not slot-sized ones.** The logical units involved
+are small, so a full image costs little, and one image is then a superset of
+both realtime slots, the bootloader payloads and the NPU firmwares at once —
+with a single digest to check instead of one per extent, and no chance of
+having read the wrong window. Hash on the board, stream the image off
+compressed, and hash again after decompressing on the host: that checks the
+transfer end to end, rather than checking the board against itself.
+
+**The environment needs no serial.** `fw_printenv` is absent from this root
+filesystem, but the saved environment is a plain run of `key=value` strings
+behind a short header, living in one of the eMMC boot areas, so it can be read
+as bytes from Linux and decoded on the host. Find it by searching those areas
+for the name of a variable you know was set — the offset is a property of the
+U-Boot build, so search rather than hard-code it. Doing it this way is
+strictly better than a `printenv` transcript: it captures the stored form
+rather than a rendering of it, and it costs no reboot and no console. Self-boot
+can also be restored from `selfboot-env.txt` on the boot partition with no host
+at all ([selfboot.md](selfboot.md)), so that remains belt and braces.
 
 ## Stage 1: bring the NPU up with no flash writes at all
 
 Everything here is remote-capable. None of it touches flash.
 
-1. **Merge the NPU device tree into the board's.** Three additions: the NPU
-   cluster and UIO nodes, a root-level `/cmem` node carrying a
-   `memory-region` phandle list, and the reserved-memory regions both refer
-   to. Two of the vendor's regions collide with regions the board already
-   defines — one against the board's CMA area, one against a region that
-   cannot move. The vendor's memory-map appendix marks which addresses are
-   redefinable and which are fixed; resolve the collisions from that table
-   rather than by picking whichever side looks easier.
+1. **Merge the NPU device tree into the board's — this is where it stops.**
+   The shape of the merge was never in doubt: the NPU cluster and UIO nodes, a
+   root-level `/cmem` node carrying a `memory-region` phandle list, and the
+   reserved-memory regions it refers to. Where those regions can go is in
+   doubt, and badly enough that it is now a question for the vendor rather
+   than a step. Read [Where this stops](#where-this-stops) before starting.
+
+   Read the vendor's own NPU device tree first in any case. It is a complete,
+   ready-made dtb rather than a fragment, which settles what the nodes look
+   like without guesswork — and it also shows, by what it leaves out, that the
+   vendor's NPU configuration and this branch's realtime work are not
+   configured to run together.
 2. **Build the cmem driver.** It is public and needs no SDK access:
    `github.com/renesas-rcar/cmem`, branch `rcar_gen5`, GPL-2.0. **Pin commit
    `e67f473c`, not HEAD.** HEAD adapts the driver to kernel 6.12 —
    `follow_pfnmap_start`, `vm_flags_set`, and the one-argument
    `class_create` — and every one of those postdates the 6.1 this board runs.
-   `e67f473c` uses the older forms and is expected to build unpatched. Pin
-   the SHA the way `kernel/build-bsp-kernel.sh` pins the BSP tree: the branch
-   is mutable, the commit is the source of truth.
-3. **Load it and confirm the devices appear.** The driver takes its region
-   sizes as a module parameter array and creates one `cmem_other` device per
-   region, so the count has to match what the runtime opens. Confirm
-   `/dev/npuc*` and `/dev/cmem_other*` both exist before going further —
-   `board/npu-probe`-style output, not inspection by eye.
+   `e67f473c` uses the older forms. Pin the SHA the way
+   `kernel/build-bsp-kernel.sh` pins the BSP tree: the branch is mutable, the
+   commit is the source of truth.
+
+   **Done, 2026-08-10.** It builds unpatched, and needs no kernel rebuild: an
+   out-of-tree module only wants a configured and built kernel tree at the
+   matching version, and the tree left behind by an earlier
+   `build-bsp-kernel.sh` run serves. Check the result by its `vermagic`
+   against the running kernel rather than by the build succeeding — a module
+   built against the wrong tree also compiles cleanly and then refuses to
+   load. It loads and unloads on the board, and with no `/cmem` node present
+   it creates only the default-CMA device, which is the expected shape of a
+   half-configured system rather than a failure.
+3. **Load it and confirm the devices appear.** Two mechanisms decide what
+   appears, and they are easy to conflate. The driver's size parameter is an
+   array, but it governs the devices carved out of the *default CMA* region;
+   the `cmem_other` devices are a separate family whose **count and size come
+   from the `/cmem` node's phandle list alone** — one device per phandle,
+   each inheriting its reserved region's address and extent, neither
+   overridable from the command line. So a `cmem_other` device of the wrong
+   size is a device-tree defect, not a module-argument one.
+
+   Confirm `/dev/npuc*` and `/dev/cmem_other*` both exist before going
+   further — `board/npu-probe`-style output, not inspection by eye — and
+   remember that their existence depends on the udev rules as much as on the
+   device tree.
+
+   **Done, 2026-08-11, as far as the device tree allows.** Both rules
+   (`config/51-x5h-uio.rules`, `config/52-x5h-cmem.rules`) are verified on the
+   board: 177 UIO name symlinks appear, and a fresh `cmemdrv` load with the
+   rule in place produces `/dev/cmem0` at `0666` rather than `0600`. Only
+   `cmem0` appears and no `npuc*` does, which is the expected shape while
+   `/cmem` and the NPU nodes are absent — so what remains untested here is the
+   device tree, not the plumbing around it. [uio.md](uio.md) records how the
+   `npuc*` mode branch was exercised without an `npuc*` device.
 4. **Run the critical experiment.** The ONNX Runtime release ships
    precompiled artifacts for two sample models, so this needs no compiler
    licence: deploy the runtime container, run the latency evaluation, and
    assert positively that the Renesas EP executed subgraphs rather than
-   inferring it from a run that merely completed.
+   inferring it from a run that merely completed. The runtime is distributed
+   as a wheel built for one specific Python minor version, which this root
+   filesystem does not carry — hence a container rather than a `pip install`.
+
+   **Run 2026-08-11: everything above the device node works, and the run stops
+   at the device node.** The provider loaded the artifacts, matched the model,
+   and dispatched every one of the fused graph's nodes to the NPU — `Conv`,
+   `Relu`, `Add`, `GlobalAveragePool`, `Flatten`, `Gemm`, `Softmax` — then the
+   backend's `RenesasBackendLoad` reported `Failed to open device /dev/npuc1`,
+   `driver_open failed: -1`, and ORT raised `Create state function failed`.
+   Nothing before that point is speculative any more: the wheel runs on this
+   board's CPU and kernel, the artifacts are readable, the EP registers, and
+   the only missing thing is the device the device tree does not describe.
+
+   `scripts/npu-probe.sh` is the check to run instead of reading that output by
+   eye. Today it stops at layer 2 with
+   `NPU_PROBE_FAIL reason=npuc_not_in_dtb sysfs_matches=0 uio_devices=177`,
+   which is the correct answer and exercises everything except the layers that
+   need the NPU present.
+
+### Three traps in step 4, all measured
+
+- **The sample script exits 0 when it fails.** `run_inference()` catches every
+  exception, prints `Error occurred: ...`, and returns normally. A caller that
+  tests `$?` sees success on a board with no NPU at all. Assert on the output
+  text.
+- **A completed run is not an offloaded run.** The script lists
+  `CPUExecutionProvider` after the Renesas EP, so a working-looking latency
+  figure is exactly what a board without the NPU would produce if the EP
+  declined instead of failing. The provider list from `get_providers()` is the
+  minimum assertion; the ORT profiler's per-node assignment
+  (`--enable-rtt`) is the real one, and its schema should be read once on
+  working hardware before anything asserts against it.
+- **The artifacts have to be mounted under their own directory name.** The
+  manifest's `artifact_path` is `resnet18_artifacts/nnx/...`, resolved against
+  the artifacts directory's *parent*. Mount the directory as
+  `/work/artifacts` and the backend looks for `/work/resnet18_artifacts` and
+  misses — after printing a path that looks plausible.
+
+### Getting the runtime onto the board
+
+The board has no internet route, no `python3`, and no `tar`; it does have
+`podman`, `cpio` and `gzip`. So the image is built elsewhere and moved as a
+file, not pulled:
+
+```sh
+# on any x86_64 host with qemu binfmt registered
+podman build --platform linux/arm64 -t localhost/x5h-ort:1.1.0 .   # python:3.11-slim + the aarch64 wheel
+podman save localhost/x5h-ort:1.1.0 | gzip -1 > x5h-ort.tar.gz
+ssh root@192.168.0.20 'cat > /root/npu/x5h-ort.tar.gz' < x5h-ort.tar.gz
+ssh root@192.168.0.20 'gzip -dc /root/npu/x5h-ort.tar.gz | podman load'
+```
+
+Artifacts travel the same way through `cpio -o -H newc | gzip`, unpacked with
+`cpio -idm`. Verify both by `sha256sum` on each end rather than by size: a
+binary piped through `cat` on the sending side can be silently truncated
+(see the transfer note in [selfboot.md](selfboot.md)); stdin redirection as
+above is what avoids it. Measured throughput to the bench over the tailnet is
+about 1.5 MB/s, so the 164 MB image takes a little under two minutes and the
+228 MB artifact archive about two and a half.
+
+Verified on the board: `aarch64`, Python `3.11.15`, `onnxruntime 1.24.0`, and
+`get_available_providers()` returning `['RenesasExecutionProvider',
+'CPUExecutionProvider']`.
 
 If step 4 passes, the stock IPL is sufficient and Stage 2 is a performance
 question to schedule whenever someone is next at the bench. If it fails in a
 way that points at the IPL, Stage 2 becomes necessary and its cost is now
 known rather than assumed.
+
+## Where this stops
+
+An earlier draft of this document said the NPU's regions collided with two of
+the board's, one of them movable, and sent you to a memory-map appendix to
+decide which side gives way. Both halves of that were wrong, and the correction
+is the reason Stage 1 is not finished.
+
+**The appendix is not in this SDK.** It belongs to the separate hardware
+user's manual. Every document that ships with the SDK was searched; none of
+them marks addresses as redefinable or fixed. Do not spend an afternoon
+looking for it here.
+
+**The overlap is not two regions, and it is not a placement problem.** Compared
+against the board's live reserved-memory, the NPU's own allocation map — which
+the AI tools carry in their host-application sources, so it can be read
+directly rather than inferred — overlaps the bootloader area, the FreeRTOS
+application area, the default CMA, and the realtime core's shared window with
+the application cores. The last of those is the one that matters: the NPU's
+model-binary area does not merely touch that window, it contains it outright,
+along with all three of the realtime core's small RAM regions. Carving the
+realtime regions back out is therefore not a fix. It would hand the NPU less
+memory than it was compiled to address, in the middle of the range it uses.
+
+**There is nowhere below 4 GiB to move to.** That bank is fully spoken for on
+this board — bootloader, FreeRTOS application, realtime regions, both CMA
+areas — with no gap of any size left over.
+
+**Moving the NPU's regions up is the obvious escape, and it may not be
+available.** The board has ample free memory above 4 GiB, and the vendor
+already places half of the NPU's regions up there, so the hardware plainly
+reaches it. But the precompiled model artifacts contain absolute physical
+addresses in the affected ranges, which points at a memory map fixed at
+compile time. If it is, changing it means recompiling the models, and the
+compiler is licensed under terms that make it a bench-only tool
+([companion-host.md](companion-host.md) describes the access tiers this
+interacts with).
+
+So the honest summary is that the vendor's NPU configuration and this branch's
+realtime work are not, as shipped, configured to coexist — and whether that is
+a fixed property of the platform or of this release is not answerable from the
+material on hand. That question, and the ones about relocatability and the IPL,
+have gone to the vendor. What would unblock the work: confirmation that the NPU
+regions may be relocated, and how to build artifacts for a relocated map. What
+would end it differently: confirmation that they may not, in which case NPU
+bring-up and the realtime responder become alternative configurations of this
+board rather than a single one, and this document needs a different shape.
+
+None of this touches Stage 0, the driver build, the udev rules or the runtime
+container. All four are done and verified on hardware, and none of them left
+the board in a state it was not found in. That is worth stating precisely,
+because it narrows the open question to one thing: every layer between the
+ONNX model and the device node is now known to work on this board, and what
+remains is the device tree — which is exactly what the vendor question is
+about.
 
 ## Stage 2: the IPL, only if Stage 1 shows it is needed
 

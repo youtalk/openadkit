@@ -48,7 +48,11 @@ On the self-booted `6.1.102-autosd` board:
 | probe errors in `dmesg` | none |
 
 The devices come up named from each node's `linux,uio-name`, which is what
-makes them addressable by something other than a probe-order index:
+makes them addressable by something other than a probe-order index. The name
+lands in `/sys/class/uio/uioN/name`; the device node itself is still
+`/dev/uioN`, and still `0600 root:root`. Turning the name into a path takes a
+udev rule — see [From a sysfs name to a `/dev`
+path](#from-a-sysfs-name-to-a-dev-path).
 
 | name prefix | count | block |
 |---|---|---|
@@ -86,10 +90,48 @@ read. `modprobe -r uio_pdrv_genirq && modprobe uio_pdrv_genirq` re-reads it
 without a reboot; the module binds nothing beforehand, so unloading it is a
 no-op.
 
+## From a sysfs name to a `/dev` path
+
+Binding the devices and naming them is not the same as making them openable.
+UIO creates `/dev/uioN` numbered by probe order and `0600 root:root`; the
+`linux,uio-name` reaches `/sys/class/uio/uioN/name` and stops there. A runtime
+that opens `/dev/npuc0` therefore gets `ENOENT` on a board where the device
+tree, the module binding and the sysfs name are all correct — the same shape of
+failure as the `of_id` trap above, and misleading in the same direction.
+
+`config/51-x5h-uio.rules` closes it, and `config/52-x5h-cmem.rules` does the
+same for the contiguous-memory devices:
+
+```
+SUBSYSTEM=="uio", SYMLINK+="$attr{name}"
+SUBSYSTEM=="uio", ATTR{name}=="npuc*", MODE="0666"
+```
+
+One symlink rule covers all 177 devices at once. The mode line is deliberately
+narrower than the vendor's reference rootfs, which relaxes every UIO device on
+the board: only the NPU cluster is opened to a non-root process. Widen that
+match if the runtime turns out to need another block — a blanket `0666` here
+would hand every capture, ISP and RSIP block on the SoC to any local process.
+
+**Verified on hardware, 2026-08-11.** All 177 devices gained a name symlink
+(`/dev/rpmsg_shm0` → `uio0`, `/dev/rpmsg_ipi0` → `uio1`); nodes outside the
+`npuc*` match stayed `0600`. The `ATTR{name}` branch was exercised separately
+against `rpmsg_shm*` — `/dev/uio0` became `0666` and `/dev/uio1` did not — since
+no `npuc*` device exists until the NPU nodes are in the device tree. With the
+cmem rule in place, a fresh `cmemdrv` load produced `/dev/cmem0` at `0666`
+directly.
+
+**Removing a rule does not undo it.** udev applies modes when it processes a
+device; a `udevadm trigger` after deleting the rule leaves the node at whatever
+it was last set to. The mode returns only when the node is re-created — a
+reboot, or unbinding and rebinding the driver. Testing from
+`/run/udev/rules.d` keeps the *rule* out of the image, but the permission
+change it made outlives it, so put the node back by hand.
+
 ## What this does not cover
 
-Enabling UIO does not by itself make the NPU reachable. Three things are
-still missing, and none of them is fixed by this drop-in:
+Enabling UIO does not by itself make the NPU reachable. Three things are still
+missing, and none of them is fixed by this drop-in:
 
 - **The NPU's device-tree nodes are absent from the board's dtb.** The board
   boots `r8a78000-ironhide-uio-autosd.dtb`, built from the public
@@ -101,14 +143,19 @@ still missing, and none of them is fixed by this drop-in:
 - **`/dev/cmem_other*`** — the contiguous-memory devices the runtime opens
   are served by an out-of-tree Renesas module, loaded once per boot. It is
   absent from the pinned kernel source and from this image's module tree, and
-  the vendor ships it built against their own kernel release, so it cannot
-  simply be copied across.
+  the vendor's build is against their own kernel release, so it cannot simply
+  be copied across; it is built from public source against this board's kernel
+  tree instead ([npu-bringup.md](npu-bringup.md) pins the commit and explains
+  why not HEAD). The module itself is no longer the gap — the `cmem_other`
+  devices are, because their count and size come from a `/cmem` device-tree
+  node this board does not have.
 - **`/dev/npuc*`** — these are UIO devices, named the same way as every
   device in the table above: the vendor's NPU device tree declares them
   `generic-uio` with a `linux,uio-name`, and the userspace side selects their
   register windows by `mmap` offsets that are multiples of the page size,
-  which is the UIO map-selection convention. So the drop-in here is the
-  mechanism the NPU will use; what is missing is only the nodes.
+  which is the UIO map-selection convention. So the drop-in here, and the udev
+  rule above, are the mechanism the NPU will use; what is missing is only the
+  nodes.
 
 ## Related
 
