@@ -38,6 +38,10 @@ answered before board time.
 - [UIO](uio.md) — hand the SoC's accelerator blocks to userspace; why
   `uio_pdrv_genirq` comes up loaded and bound to nothing without an `of_id`,
   and what the NPU still needs beyond it.
+- [NPU bring-up](npu-bringup.md) — what remains before the ONNX Runtime
+  Renesas EP can reach the NPU, why most of it needs no flash write, and
+  which two writes would break the CR52 round trip and the self-boot
+  partitions. Investigated on hardware 2026-08-10, not yet executed.
 
 ## Folder Structure
 
