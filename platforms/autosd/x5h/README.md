@@ -505,6 +505,7 @@ gh run download --repo youtalk/openadkit -n x5h-gate-bundle -D /tmp/x5h-bundle \
 #      Image-autosd  r8a78000-ironhide-uio-autosd.dtb  modules-6.1.102-autosd.tar
 #      kernelrelease.txt  config-autosd.txt  x5h-rootfs.tar  x5h-gate.log
 #      testimages/busybox-oci.tar  testimages/captest-docker.tar
+#      testimages/rpmsg-eth-docker.tar
 #    There is no ext4 export in the bundle — it's reproducible and large,
 #    so rebuild it from the tar below, the same way the CI workflow's own
 #    "Derive the ext4 export from the tar" step does.
@@ -531,7 +532,7 @@ sudo umount "$mnt"
 rmdir "$mnt"
 
 # 4. Inject the test payload. Use the script, not a hand-copy: besides the
-#    two test tars and gate-guest.sh, it also neutralizes /etc/fstab
+#    three test tars and gate-guest.sh, it also neutralizes /etc/fstab
 #    (preserving the original as fstab.image) — skip that and the guest
 #    reboot-loops on the stock fstab's ESP entry (see Troubleshooting) —
 #    and now also extracts the rebuilt kernel's module tree (depmod'd for
