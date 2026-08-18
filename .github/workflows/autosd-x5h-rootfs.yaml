@@ -50,11 +50,42 @@ jobs:
             flex bison libssl-dev libelf-dev bc
 
       - name: Put container storage on a non-overlay location (aib CI pattern)
+        # The unconditional `rm -rf` this step used to open with started
+        # failing on the arm64 runner image with `cannot remove
+        # /var/lib/containers/storage/overlay: Device or resource busy` --
+        # the image now ships a podman store with something already mounted
+        # under it. Same runner label, same step, green on 2026-08-03 and red
+        # on 2026-08-18, so this is runner-image drift, not a workflow change.
+        #
+        # Unmount whatever is there (deepest first, lazily) before removing,
+        # and let the removal fail without failing the step: what this step
+        # actually has to guarantee is that podman *writes* to a non-overlay
+        # location, and the bind mounts below deliver that whether or not the
+        # old tree could be deleted first. The findmnt at the end is the real
+        # assertion -- if the binds are not in place the step fails there,
+        # rather than silently leaving podman on the runner's overlay.
         run: |
-          sudo rm -rf /var/lib/containers /run/containers
+          sudo systemctl stop podman.socket podman.service 2>/dev/null || true
+          awk '$2 ~ /^\/(var\/lib|run)\/containers/ {print $2}' /proc/self/mounts \
+            | sort -r | while read -r m; do sudo umount -l "$m" || true; done
+          sudo rm -rf /var/lib/containers /run/containers || true
+          # Same root cause, second symptom: the image also ships a podman SHM
+          # lock segment, and one sized for a different lock count makes every
+          # later podman call die with `failed to open 2048 locks in
+          # /libpod_lock: numerical result out of range` (exit 125) before it
+          # does any work. Listed before removal so the log shows whether the
+          # segment was pre-existing rather than leaving that a guess.
+          echo "--- /dev/shm before ---"; sudo ls -l /dev/shm || true
+          sudo rm -f /dev/shm/libpod_lock /dev/shm/libpod_rootless_lock
           sudo mkdir -p "$RUNNER_TEMP/_containers/var" "$RUNNER_TEMP/_containers/run" /var/lib/containers /run/containers
           sudo mount --bind "$RUNNER_TEMP/_containers/var" /var/lib/containers
           sudo mount --bind "$RUNNER_TEMP/_containers/run" /run/containers
+          findmnt -no SOURCE,TARGET /var/lib/containers
+          findmnt -no SOURCE,TARGET /run/containers
+          # Assert podman is actually usable now. Without this the next
+          # failure is a bare exit 125 from inside auto-image-builder.sh,
+          # which says nothing about which of these preconditions broke.
+          sudo podman info --format '{{.Version.Version}} {{.Store.GraphRoot}} {{.Store.RunRoot}}'
 
       - name: Install automotive-image-builder runner
         run: |
