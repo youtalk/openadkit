@@ -87,6 +87,23 @@ jobs:
           # which says nothing about which of these preconditions broke.
           sudo podman info --format '{{.Version.Version}} {{.Store.GraphRoot}} {{.Store.RunRoot}}'
 
+      - name: Show container runtime versions (diagnostic)
+        # `Error: OCI runtime error: crun: unknown version specified` (exit
+        # 126) from the builder-image build points at a podman/OCI-runtime
+        # spec mismatch, but which side is stale is not something to guess:
+        # the runner image ships its own podman (info reports 5.8.4) while
+        # `Install host tools` also apt-installs one, so PATH order and the
+        # runtime each resolves to are the facts needed to fix it. Never
+        # fails the job -- it exists to put those facts in the log.
+        if: ${{ !cancelled() }}
+        run: |
+          which -a podman crun runc || true
+          podman --version || true
+          crun --version || true
+          runc --version || true
+          sudo podman info --format 'runtime={{.Host.OCIRuntime.Name}} path={{.Host.OCIRuntime.Path}} version={{.Host.OCIRuntime.Version}}' || true
+          dpkg -l podman crun runc 2>/dev/null | tail -5 || true
+
       - name: Install automotive-image-builder runner
         run: |
           curl -fL -o auto-image-builder.sh \
