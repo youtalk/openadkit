@@ -31,6 +31,7 @@ RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
     . /opt/autoware/setup.sh && \
     colcon build \
       --base-paths \
+        /tmp/autoware/src/launcher/autoware_launch/autoware_launch \
         /tmp/autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_perception_launch \
         /tmp/autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_sensing_launch \
         /tmp/autoware/src/universe/external/bevdet_vendor \
