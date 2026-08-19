@@ -23,7 +23,7 @@ RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=
     apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
     . /opt/autoware/setup.sh && \
-    rosdep install -y --from-paths /tmp/autoware/src /opt/autoware/*/share \
+    rosdep install -y --from-paths /tmp/autoware/src /opt/autoware/share \
       --ignore-src --rosdistro "${ROS_DISTRO}" \
       --dependency-types=build --dependency-types=build_export \
       --dependency-types=buildtool --dependency-types=buildtool_export \
@@ -69,6 +69,7 @@ RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
         /tmp/autoware/src/universe/external/rtklib_ros_bridge \
         /tmp/autoware/src/universe/external/tier4_autoware_msgs \
         /tmp/autoware/src/middleware/external \
+      --merge-install \
       --install-base /opt/autoware \
       --cmake-args -DCMAKE_BUILD_TYPE=Release && \
     rm -rf build log
@@ -78,7 +79,7 @@ RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=
     --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
-    rosdep install -y --from-paths /tmp/autoware/src /opt/autoware/*/share \
+    rosdep install -y --from-paths /tmp/autoware/src /opt/autoware/share \
       --ignore-src --rosdistro "${ROS_DISTRO}" \
       --dependency-types=exec && \
     rm -rf /tmp/autoware
@@ -108,6 +109,6 @@ RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=
     --mount=type=cache,id=apt-lists-${ROS_DISTRO},target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
     . "/opt/ros/${ROS_DISTRO}/setup.sh" && \
-    rosdep install -y --from-paths /tmp /opt/autoware/*/share \
+    rosdep install -y --from-paths /tmp /opt/autoware/share \
       --dependency-types=exec --ignore-src --rosdistro "${ROS_DISTRO}" && \
     rm -rf /tmp/*
