@@ -52,6 +52,10 @@ RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=
 FROM ${UNIVERSE_COMMON_IMAGE} AS visualizer
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG ROS_DISTRO
+# Supplied automatically by BuildKit ("amd64" / "arm64"); must be redeclared in
+# the stage that consumes it.
+ARG TARGETARCH
+ARG VIRTUALGL_VERSION=3.1.2
 
 USER root
 COPY --from=visualizer-devel /opt/autoware /opt/autoware
@@ -88,7 +92,7 @@ RUN --mount=type=cache,id=apt-cache-${ROS_DISTRO},target=/var/cache/apt,sharing=
       pipx && \
     PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install yamale && \
     PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install xmlschema && \
-    curl -fsSL -o /tmp/virtualgl.deb https://github.com/VirtualGL/virtualgl/releases/download/3.1.2/virtualgl_3.1.2_amd64.deb && \
+    curl -fsSL -o /tmp/virtualgl.deb "https://github.com/VirtualGL/virtualgl/releases/download/${VIRTUALGL_VERSION}/virtualgl_${VIRTUALGL_VERSION}_${TARGETARCH}.deb" && \
     apt-get install -y --no-install-recommends /tmp/virtualgl.deb && \
     rm -f /tmp/virtualgl.deb
 
