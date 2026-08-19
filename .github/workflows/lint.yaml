@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '**/*.sh'
+      - 'platforms/autosd/x5h/components/nodes/*.py'
       - '.github/workflows/lint.yaml'
 
 concurrency:
@@ -21,3 +22,30 @@ jobs:
         uses: ludeeus/action-shellcheck@2.0.0
         with:
           severity: error
+
+  # traj_relay.py downsamples the Autoware trajectory to fit domain 2's
+  # MTU 462. That arithmetic is load-bearing -- an off-by-one in the point
+  # budget means the CR52 either receives a fragmented sample it cannot
+  # reassemble or receives nothing -- and test_traj_relay.py pins it against
+  # CDR sizes measured with rclpy's own serialize_message() on the staged
+  # arm64 image. The tests need no ROS: traj_relay defers its rclpy imports
+  # into main(), so everything exercised is plain Python.
+  #
+  # Gated here rather than deleted. The file sat in the tree for a while with
+  # nothing running it, which is the worst of both worlds -- it reads as
+  # coverage while proving nothing, and it rots silently. 21 tests, all
+  # passing at the time this job was added.
+  traj-relay-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install pytest
+        run: python3 -m pip install --user pytest
+        shell: bash
+
+      - name: Run traj_relay unit tests
+        run: python3 -m pytest -q test_traj_relay.py
+        working-directory: platforms/autosd/x5h/components/nodes
+        shell: bash
