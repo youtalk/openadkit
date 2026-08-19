@@ -86,7 +86,7 @@ services:
       - map
     command: >
       ros2 launch autoware_launch tier4_system_component.launch.xml
-      diagnostic_graph_aggregator_graph_path:=/opt/autoware/share/autoware_launch/config/system/diagnostics/autoware-carla.yaml
+      diagnostic_graph_aggregator_graph_path:=/opt/autoware/autoware_launch/share/autoware_launch/config/system/diagnostics/autoware-carla.yaml
       launch_dummy_diag_publisher:=${LAUNCH_DUMMY_DIAG_PUBLISHER}
       launch_system_monitor:=${LAUNCH_SYSTEM_MONITOR}
       sensor_model:=${SENSOR_MODEL}
@@ -218,7 +218,7 @@ services:
     command: >
       ros2 launch tier4_vehicle_launch vehicle.launch.xml
       launch_vehicle_interface:=${LAUNCH_VEHICLE_INTERFACE}
-      raw_vehicle_cmd_converter_param_path:=/opt/autoware/share/autoware_launch/config/vehicle/raw_vehicle_cmd_converter/raw_vehicle_cmd_converter.param.yaml
+      raw_vehicle_cmd_converter_param_path:=/opt/autoware/autoware_launch/share/autoware_launch/config/vehicle/raw_vehicle_cmd_converter/raw_vehicle_cmd_converter.param.yaml
       sensor_model:=${SENSOR_MODEL}
       use_sim_time:=${USE_SIM_TIME}
       vehicle_id:=${VEHICLE_ID}
