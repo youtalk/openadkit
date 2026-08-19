@@ -1,0 +1,506 @@
+name: autosd-x5h-rootfs
+on:
+  push:
+    branches: [feat/autosd-x5h-rootfs, feat/autosd-x5h-kernel]
+  pull_request:
+    paths:
+      - platforms/autosd/x5h/**
+      - .github/workflows/autosd-x5h-rootfs.yaml
+permissions:
+  contents: read
+# Push (branch) and pull_request (paths filter) both fire for the same commit
+# once the fork PR exists, and this workflow runs two jobs: a pinned-toolchain
+# x64 kernel compile (build-kernel), then multi-hour arm64 CI (aib build +
+# native container builds + a TCG QEMU boot, build-and-gate). Group by the
+# commit SHA rather than by ref/PR-number so a push-triggered run and the
+# pull_request-triggered run it also fires collapse into one concurrency slot
+# and the redundant one is cancelled instead of both running to completion.
+# `github.sha` alone would not do this: on a pull_request event it is the
+# ephemeral merge commit, not the head commit, so it never matches the push
+# event's `github.sha` for the same commit. `pull_request.head.sha` is the
+# actual head commit and does match. Two different commits still get two
+# independent slots, so an in-flight run for an older commit during
+# iteration is not cancelled by a newer, unrelated push.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+jobs:
+  build-kernel:
+    # x86_64 on purpose: the kernel is cross-compiled with the pinned ARM
+    # GNU 13.2.Rel1 x86_64-hosted toolchain -- the exact binary that
+    # avoided the board's layout-sensitive SMP wedge 3/3 while GCC 13.3
+    # triggered it 3/3 (2026-08-05 board session; see the build script
+    # header). ARM ships no aarch64-hosted 13.2.Rel1, so this job cannot
+    # run on the arm64 runner. Running it first also makes a kernel build
+    # error fail the workflow before the multi-hour arm64 job spends
+    # anything.
+    runs-on: ubicloud-standard-16
+    # Unmeasured on purpose-built hardware as of this branch: no run of this
+    # job has completed yet, so the number is a budget, not an observation.
+    # It has to cover a cold 134 MB toolchain fetch, a ~200 MB source fetch,
+    # and a full `Image dtbs modules` build of a Yocto-derived BSP config
+    # carrying debug info -- so 90 rather than a tighter guess, and the
+    # df -h probes around the build below are what make a timeout or an
+    # ENOSPC diagnosable instead of just red. Tighten it once a green run
+    # has given a real figure.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report disk headroom (before the kernel build)
+        run: df -h /
+
+      - name: Install kernel build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison libssl-dev libelf-dev bc xz-utils
+
+      - name: Cache the pinned cross-toolchain tarball
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/x5h-toolchain/arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz
+          key: arm-gnu-toolchain-13.2.rel1-x86_64-aarch64-none-linux-gnu-12fcdf13
+
+      - name: Build the BSP kernel (pinned source, pinned ARM GNU 13.2.Rel1 cross)
+        run: |
+          platforms/autosd/x5h/kernel/build-bsp-kernel.sh "$RUNNER_TEMP/bspkernel"
+
+      - name: Report disk headroom (after the kernel build)
+        # always(), and paired with the probe before the build: a kernel tree
+        # plus its object files is tens of GB, and an ENOSPC surfaces as an
+        # unrelated-looking compiler or tar error. Without a before/after
+        # pair there is nothing in the log to tell that apart from a genuine
+        # build break.
+        if: always()
+        run: df -h /
+
+      - name: Upload the kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: x5h-kernel
+          path: |
+            ${{ runner.temp }}/bspkernel/Image-autosd
+            ${{ runner.temp }}/bspkernel/r8a78000-ironhide-uio-autosd.dtb
+            ${{ runner.temp }}/bspkernel/modules-6.1.102-autosd.tar
+            ${{ runner.temp }}/bspkernel/kernelrelease.txt
+            ${{ runner.temp }}/bspkernel/config-autosd.txt
+            ${{ runner.temp }}/bspkernel/provenance.txt
+            ${{ runner.temp }}/bspkernel/extract-ikconfig
+          retention-days: 14
+          if-no-files-found: error
+
+  build-and-gate:
+    # Serial by necessity: this job consumes the kernel artifact at the
+    # inject step, and GitHub Actions cannot wait mid-job for another
+    # job's artifact. The x64 cross build it waits for replaces the
+    # kernel compile that used to run natively inside this job, so
+    # wall-clock is roughly neutral -- and a kernel build error now
+    # fails before the multi-hour aib build starts.
+    needs: build-kernel
+    # 30 vCPU (user-approved): kept after the kernel compile moved out to
+    # the x64 build-kernel job -- the aib build, the native container
+    # builds and the TCG QEMU gate still run here. If this label ever
+    # fails to resolve (cycle-1 check), fall back to ubicloud-standard-16-arm.
+    runs-on: ubicloud-standard-30-arm
+    # Generous but bounded: the job is expected to run for hours (aib build,
+    # docker build/skopeo for the test images -- native on this arm64
+    # runner, not emulated, so cheaper than the platform-generic worst
+    # case -- and a TCG QEMU boot, whose gate alone budgets up to 1800s
+    # to a login prompt plus a 900s inactivity window per marker). 240
+    # stays well below the 360-minute platform default while giving that
+    # worst case real headroom, so a genuinely stuck step (a hung prompt,
+    # a runaway retry loop) fails within a single working session instead
+    # of the ceiling itself wasting the whole cycle with no diagnostic.
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report disk headroom (before host tool install)
+        run: df -h /
+
+      - name: Install host tools
+        # podman and crun are installed together, as a PAIR, only when
+        # podman is itself absent, because two container stacks coexist on
+        # this runner and apt supplies the wrong one. Measured on the
+        # Ubicloud arm64 runner image (2.336.0, 2026-08-06): the image ships
+        # a matched, modern pair in /usr/local/bin, outside dpkg -- podman
+        # 5.8.4 with crun 1.28, its systemd units in
+        # /usr/local/lib/systemd/system -- while `apt-get install podman
+        # crun` adds an OLDER pair in /usr/bin (podman 4.9.3+ds1-1ubuntu0.2,
+        # crun 1.14.1). sudo resolves binaries through secure_path, which
+        # lists /usr/local/bin before /usr/bin, so podman 5.8.4 is the one
+        # that actually runs. Pinning that podman to the dpkg-owned
+        # /usr/bin/crun therefore paired it with crun 1.14.1, whose
+        # supported OCI spec is 1.0.0, and crun rejected the newer
+        # ociVersion podman 5.8.4 writes into config.json: "OCI runtime
+        # error: crun: unknown version specified", exit 126. crun is
+        # therefore resolved below as a sibling of whichever podman sudo
+        # will actually run, never installed or pinned independently; if no
+        # sibling crun is found, no pin is applied at all rather than risk
+        # repeating that mismatch.
+        run: |
+          sudo apt-get update
+          # skopeo/qemu/expect are unconditional. podman and crun are added
+          # only when nothing already provides podman, and they are added as
+          # a PAIR -- never one half. Testing the two independently is what
+          # opens the hole: an image shipping podman 5.x in /usr/local/bin
+          # but no crun would make apt drop crun 1.14.1 into /usr/bin, i.e.
+          # introduce the mismatched half of a pair whose other half is
+          # already fixed. command -v returns nonzero on a miss, which under
+          # bash -e would abort the step, so the miss is what selects the
+          # branch rather than what fails.
+          PKGS=(skopeo qemu-system-arm qemu-utils expect)
+          if command -v podman >/dev/null 2>&1; then
+            echo "podman already provided by the image; not adding podman/crun from apt"
+          else
+            PKGS+=(podman crun)
+          fi
+          echo "apt packages to install: ${PKGS[*]}"
+          sudo apt-get install -y "${PKGS[@]}"
+
+          # Then make podman's runtime choice explicit rather than leaving it
+          # to a binary search. This is a DROP-IN, not an edit of
+          # containers.conf: podman reads
+          # /usr/share/containers/containers.conf, then
+          # /etc/containers/containers.conf, then
+          # /etc/containers/containers.conf.d/*.conf in alphanumeric order,
+          # with later files overriding earlier ones (containers.conf(5)).
+          # The drop-in therefore wins over whatever either full config says,
+          # without clobbering unrelated settings the image may depend on;
+          # the filename must end in .conf. The mechanism is confirmed --
+          # the post-reset probe below reported exactly the path this file
+          # named -- so only the VALUE changes here.
+          #
+          # crun is resolved as a SIBLING of the podman that will actually
+          # run, under the SAME lookup that will run it. Pairing is a
+          # co-installation property, not a PATH property, and the two halves
+          # used to be resolved by two different resolvers: crun through the
+          # unprivileged runner user's PATH at pin time, podman through
+          # sudo's secure_path at use time (every podman call that matters
+          # here is `sudo podman`, or aib under sudo). Those agree on image
+          # 2.336.0, but that is a property of that image, not of the
+          # mechanism. When the resolved podman has no sibling crun there is
+          # deliberately NO fallback to some other crun on PATH: marrying
+          # podman 5.x to an apt crun 1.14.1 is exactly how "OCI runtime
+          # error: crun: unknown version specified", exit 126, was produced
+          # once already. No pin is strictly better than a wrong pin, because
+          # podman then runs its own default-runtime search.
+          PODMAN_BIN="$(sudo sh -c 'command -v podman' 2>/dev/null || true)"
+          CRUN_BIN=
+          if [ -n "$PODMAN_BIN" ] && [ -x "$(dirname "$PODMAN_BIN")/crun" ]; then
+            CRUN_BIN="$(dirname "$PODMAN_BIN")/crun"
+          fi
+          # Printed as a pair so the pairing DECISION is in the log, rather
+          # than being inferred from the type -a dump below.
+          echo "resolved podman (sudo secure_path): ${PODMAN_BIN:-<none>}"
+          echo "paired crun (sibling of that podman): ${CRUN_BIN:-<none>}"
+          if [ -n "$CRUN_BIN" ]; then
+            sudo install -d -m 0755 /etc/containers/containers.conf.d
+            printf '[engine]\nruntime = "crun"\n\n[engine.runtimes]\ncrun = ["%s"]\n' "$CRUN_BIN" \
+              | sudo tee /etc/containers/containers.conf.d/10-openadkit-crun.conf
+          else
+            # No crun beside the podman that will run: writing a drop-in that
+            # points anywhere else -- or at a path that does not exist -- is
+            # strictly worse than not pinning at all, so remove any stale
+            # drop-in and let podman pick its own runtime. Say so loudly:
+            # this is not an expected state.
+            echo "::warning::no crun beside ${PODMAN_BIN:-podman}; not pinning podman's OCI runtime"
+            sudo rm -f /etc/containers/containers.conf.d/10-openadkit-crun.conf
+          fi
+
+          # Diagnostics. Every probe is individually guarded: this step runs
+          # under bash -e (GitHub's default, NOT set -euo pipefail), so a bare
+          # `command -v` for a binary that is absent, or a `podman info` from a
+          # podman that still cannot start, would abort the step and cost
+          # another blind arm64 cycle -- exactly the failure mode these probes
+          # exist to prevent. Diagnostics must never become a new failure mode.
+          echo "--- container runtime diagnostics ---"
+          command -v podman crun runc || true
+          # type -a, not just command -v: it lists EVERY match on PATH, which
+          # is what makes an image-supplied binary shadowing /usr/bin visible.
+          type -a podman crun runc || true
+          podman --version || true
+          crun --version || true
+          runc --version || true
+          dpkg -l podman crun conmon catatonit 2>/dev/null || true
+          cat /etc/containers/containers.conf.d/10-openadkit-crun.conf || true
+          # sudo, because every podman invocation that matters here is a root
+          # one (aib runs under sudo), and rootful podman is what reads
+          # /etc/containers. Expected to fail at this point in the job on a
+          # runner image that left a stale /dev/shm/libpod_lock behind -- that
+          # is cleared by the storage step below, which is why the same probe
+          # is repeated afterwards, where its answer is the one that counts.
+          sudo podman info --format '{{.Host.OCIRuntime.Name}} {{.Host.OCIRuntime.Path}} {{.Host.OCIRuntime.Version}}' \
+            || sudo podman info 2>&1 | tail -30 || true
+
+      - name: Put container storage on a non-overlay location (aib CI pattern)
+        run: |
+          # The runner image can already have podman's overlay store mounted
+          # under /var/lib/containers by the time this step runs (observed on
+          # Ubicloud arm64 runner 2.336.0, 2026-08-06: apt now pulls in podman
+          # with its systemd units, and a mounted store makes the rm -rf below
+          # fail EBUSY). Show what is actually mounted first, stop podman so
+          # nothing keeps the store open, then unmount everything at or under
+          # both paths, deepest mount first so nested mounts come off before
+          # their parents. The same 2.336.0 drift also leaves a stale
+          # /dev/shm/libpod_lock behind from the image's pre-initialized
+          # podman, whose lock count no longer matches what the fresh podman
+          # below expects ("failed to open 2048 locks in /libpod_lock:
+          # numerical result out of range"), so that SHM segment is cleared
+          # too, once the unmounts are done and before the trees are
+          # recreated. rm -rf below stays a hard gate: if a mount survives
+          # all that, it must still fail loudly rather than let the job carry
+          # on with container storage back on overlay.
+          findmnt -rno TARGET,SOURCE,FSTYPE | grep -E '/(var/lib|run)/containers' || true
+          sudo systemctl stop podman.socket podman.service || true
+          for m in $(findmnt -rno TARGET | grep -E '^/(var/lib|run)/containers($|/)' | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2- || true); do
+            sudo umount "$m" || true
+          done
+          ls -la /dev/shm/libpod* 2>/dev/null || true
+          sudo rm -f /dev/shm/libpod_lock /dev/shm/libpod*
+          sudo rm -rf /var/lib/containers /run/containers
+          sudo mkdir -p "$RUNNER_TEMP/_containers/var" "$RUNNER_TEMP/_containers/run" /var/lib/containers /run/containers
+          sudo mount --bind "$RUNNER_TEMP/_containers/var" /var/lib/containers
+          sudo mount --bind "$RUNNER_TEMP/_containers/run" /run/containers
+
+      - name: Confirm podman's OCI runtime (post-reset, pre-aib)
+        # The same probe as in "Install host tools", repeated at the first
+        # point in the job where podman can actually start: the storage step
+        # above is what clears the stale /dev/shm/libpod_lock, so this is the
+        # earliest reading that reflects the state every aib step below runs
+        # in. It is the reading that answers "did the crun pin take?" -- and
+        # it costs seconds here versus an hour-plus to reach the same question
+        # via a build-builder failure.
+        run: |
+          # Two questions, graded differently on purpose.
+          #
+          # LIVENESS -- "can podman start at all, post-reset?" -- is FATAL.
+          # A probe that ends in `|| true` answers nothing, and the hour this
+          # step exists to save is then still spent inside build-builder on
+          # exactly the drift the step was added to catch. This runs AFTER
+          # the storage reset that clears the stale /dev/shm/libpod_lock,
+          # which is the sole reason the earlier copy of this probe is
+          # expected to fail, so there is no known-good state in which this
+          # assertion fires -- and if it does, every aib step below was going
+          # to fail anyway, an hour later and less legibly.
+          sudo podman info >/dev/null 2>&1 \
+            || { echo "FATAL: podman cannot start after the storage reset"; sudo podman info 2>&1 | tail -30; exit 1; }
+          # VALUE -- which runtime, from which path, at which version -- stays
+          # best-effort. podman is demonstrably alive by this line, so a
+          # failure here can only be a Go-template/field-name mismatch in a
+          # future podman, and a diagnostic must not become a new failure
+          # mode for that. The aib steps below remain the real gate on the
+          # value being the right one.
+          sudo podman info --format 'OCIRuntime: {{.Host.OCIRuntime.Name}} {{.Host.OCIRuntime.Path}} {{.Host.OCIRuntime.Version}}' \
+            || echo "WARNING: podman is up but the OCIRuntime template did not render" >&2
+
+      - name: Install automotive-image-builder runner
+        run: |
+          curl -fL -o auto-image-builder.sh \
+            "https://gitlab.com/CentOS/automotive/src/automotive-image-builder/-/raw/main/auto-image-builder.sh?ref_type=heads"
+          chmod +x auto-image-builder.sh
+          sudo bash ./auto-image-builder.sh --help | head -30
+
+      - name: Show aib command help (source of truth for the build invocation below)
+        # The current aib CLI is bootc-shaped: no list-exports, no --mode,
+        # no --export. Capture the live --help output for `build` and
+        # `to-disk-image` plus the distro/target lists, so a flag mismatch
+        # in the next two steps is diagnosed from this output, not guessed.
+        run: |
+          sudo bash ./auto-image-builder.sh build --help || true
+          sudo bash ./auto-image-builder.sh to-disk-image --help || true
+          sudo bash ./auto-image-builder.sh list-targets || true
+          sudo bash ./auto-image-builder.sh list-distro || true
+
+      - name: Build the aib builder image
+        run: |
+          cd platforms/autosd/x5h
+          sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
+            bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build-builder --distro autosd10-sig
+
+      - name: Validate resolved aib variables (dry-run; confirms extra_repos took effect)
+        # --dump-variables alone does not stop the build, despite the CLI
+        # help text ("...and exit"): aib/osbuild.py only sets
+        # defines["print_variables"] = True, which an mpp-eval in
+        # computed-vars.ipp.yml prints with no sys.exit on that path.
+        # --dry-run is the flag that actually stops before osbuild runs
+        # (aib/main.py only appends an export "if not args.dry_run") --
+        # every upstream test pairs the two, so this step does too. With
+        # --dry-run, full manifest generation still runs, including
+        # mpp-depsolve, so this is a fast, fail-first validation of the
+        # EPEL change: if depsolve is broken this step fails here, before
+        # the real build below spends time on it. No output filtering:
+        # the full dump (including extra_repos) goes straight to the step
+        # log, and the step's own exit status is the real one -- nothing
+        # here should swallow either.
+        run: |
+          cd platforms/autosd/x5h
+          sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
+            bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build --dump-variables --dry-run --tar \
+            --distro autosd10-sig --target qemu \
+            --define-file aib/vars.yml \
+            aib/x5h-rootfs.aib.yml aib/x5h-rootfs.tar
+
+      - name: Build the x5h rootfs tar (aib build --tar)
+        # --tar builds a tar file with the container content directly,
+        # instead of a container image -- this replaces a build + podman
+        # create + podman export round trip with a single aib invocation,
+        # removing the root-vs-user podman store question entirely and
+        # cutting a step from the critical path.
+        run: |
+          cd platforms/autosd/x5h
+          sudo AIB_PODMAN_OPTIONS="-v /run/containers:/run/containers" \
+            bash "$GITHUB_WORKSPACE/auto-image-builder.sh" build --tar \
+            --distro autosd10-sig --target qemu \
+            --define-file aib/vars.yml \
+            aib/x5h-rootfs.aib.yml aib/x5h-rootfs.tar
+          ls -lh aib/x5h-rootfs.tar
+
+      - name: Inspect the tar export (podman present, btrfs-progs present, no ostree-repo layout)
+        # Positive checks anchored at a path component boundary: an
+        # unanchored grep for e.g. "usr/bin/podman" would also match
+        # "ostree/deploy/.../usr/bin/podman".
+        #
+        # The ostree/composefs guard is anchored at the archive *root*,
+        # not "anywhere in the path". bootc.spec Requires both ostree and
+        # composefs, so every aib build output -- ordinary or not --
+        # always carries usr/lib/ostree/ostree-prepare-root,
+        # usr/lib/ostree/ostree-remount and usr/bin/composefs-info. A
+        # path-anywhere match on "ostree/" or "composefs" is therefore
+        # unconditionally true for every export and tells us nothing; it
+        # would turn "dropping --mode package cost us the non-ostree
+        # property" into a guaranteed false alarm on every run. The
+        # genuine failure mode this guard exists to catch is a top-level
+        # ostree/repo/objects/... (or sysroot/ostree/...) layout, which
+        # only a root anchor can distinguish from those ordinary package
+        # files -- if it fires, that's a real finding to fail on, not
+        # something to relax.
+        run: |
+          # These `tar tf ... | grep -q` / `| head` guards are correct ONLY
+          # because this step runs under GitHub's default `bash -e {0}` with
+          # NO pipefail (there is no `shell:` or `defaults:` key anywhere in
+          # this file). grep -q exits on its first match while tar is still
+          # writing a multi-thousand-entry listing, so tar dies of SIGPIPE --
+          # under pipefail every one of these guards would return 141
+          # precisely when it MATCHES, i.e. fail exactly when it passes. That
+          # bug shipped once already on this branch (stage-rebuilt-kernel.sh,
+          # fixed in db855a4). The absence of pipefail here is load-bearing:
+          # do not add `set -o pipefail` to this step without rewriting all
+          # four pipelines first.
+          cd platforms/autosd/x5h
+          tar tf aib/x5h-rootfs.tar | head -50
+          tar tf aib/x5h-rootfs.tar | grep -qE '(^|/)usr/bin/podman' || { echo "FATAL: no podman"; exit 1; }
+          tar tf aib/x5h-rootfs.tar | grep -qE '(^|/)usr/s?bin/mkfs\.btrfs' || { echo "FATAL: no btrfs-progs"; exit 1; }
+          echo "--- ostree/composefs packages present (expected on a bootc image, informational only) ---"
+          tar tf aib/x5h-rootfs.tar | grep -E '(^|/)(ostree|composefs)' || true
+          if tar tf aib/x5h-rootfs.tar | grep -qE '^(\./)?(ostree|sysroot/ostree)/'; then
+            echo "FATAL: ostree-repo layout detected in the podman-exported rootfs"
+            exit 1
+          fi
+
+      - name: Derive the ext4 export from the tar
+        # Loop-mount + extract -- the same tar-to-ext4 reassembly Task 7's
+        # local replay documents, so the two now agree instead of diverging.
+        run: |
+          cd platforms/autosd/x5h
+          truncate -s 6G aib/x5h-rootfs.ext4
+          sudo mkfs.ext4 -q aib/x5h-rootfs.ext4
+          mnt="$(mktemp -d)"
+          sudo mount -o loop aib/x5h-rootfs.ext4 "$mnt"
+          # --xattrs: plain `tar xf` silently drops extended attributes on
+          # extract (exit 0, no warning) even when the archive carries
+          # them, so security.capability on e.g. newuidmap/newgidmap/ping
+          # would otherwise vanish here. The flags matter for that same
+          # mechanical reason regardless of target: this step runs on the
+          # CI host's ext4, and the rebuilt kernel the gate now boots also
+          # has EXT4_FS_SECURITY=y, so GATE2 asserts the restored
+          # capability survives rather than that it fails on a constrained
+          # kernel.
+          sudo tar --xattrs --xattrs-include='*.*' -xf aib/x5h-rootfs.tar -C "$mnt"
+          sudo umount "$mnt"
+          rmdir "$mnt"
+
+      - name: Download the pinned-toolchain kernel artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: x5h-kernel
+          path: ${{ runner.temp }}/bspkernel
+
+      - name: Build test images
+        # The first real execution of `docker build` on a runner with
+        # working networking (this sandbox has net.ipv4.ip_forward=0, so it
+        # was previously only proven via a non-committed --network host
+        # copy). Consumes nothing the aib steps produce, so it runs even if
+        # aib failed above: losing this signal to an unrelated aib failure
+        # is expensive on hours-per-iteration arm64 CI ahead of a one-shot
+        # board session.
+        if: ${{ !cancelled() }}
+        run: |
+          sudo systemctl start docker 2>/dev/null || true
+          platforms/autosd/x5h/scripts/make-test-images.sh "$RUNNER_TEMP/testimages"
+
+      - name: Inject test payload + rebuilt-kernel modules into the ext4 export
+        run: |
+          cd platforms/autosd/x5h
+          scripts/inject-test-images.sh aib/x5h-rootfs.ext4 "$RUNNER_TEMP/testimages" "$RUNNER_TEMP/bspkernel"
+
+      - name: Report disk headroom (before the QEMU gate)
+        run: df -h /
+
+      - name: Run the QEMU gate (same-arch TCG, no /dev/kvm on this runner)
+        run: |
+          cd platforms/autosd/x5h
+          [ -w /dev/kvm ] && echo "accel: KVM" || echo "accel: TCG (no /dev/kvm)"
+          # GATE6's outbound-SNAT probe target: in slirp, guest connections
+          # to 10.0.2.2:<port> arrive at the host's 127.0.0.1:<port>, so a
+          # container reaching this listener proves container -> podman0 ->
+          # masquerade -> guest eth0 end to end.
+          python3 -m http.server 8099 --bind 127.0.0.1 >/dev/null 2>&1 &
+          SNAT_PID=$!
+          rc=0
+          sudo ./scripts/qemu-gate.exp ./scripts/run-qemu-gate.sh \
+            "$RUNNER_TEMP/bspkernel/Image-autosd" aib/x5h-rootfs.ext4 \
+            "$RUNNER_TEMP/blank.img" /tmp/x5h-gate.log || rc=$?
+          kill "$SNAT_PID" 2>/dev/null || true
+          exit "$rc"
+
+      - name: Show gate markers
+        # Its own step under always(): under bash -e a nonzero qemu-gate.exp
+        # aborts the step it's in, so folded into the gate step above this
+        # summary would never print precisely when the gate fails.
+        if: always()
+        run: |
+          echo "--- gate markers ---"
+          grep -E 'GATE[0-9_]+' /tmp/x5h-gate.log || true
+
+      - name: Stage debugging artifacts into one flat directory before upload
+        # The source paths below span three unrelated absolute-path roots
+        # ($GITHUB_WORKSPACE, $RUNNER_TEMP, /tmp), so uploading them
+        # directly would make upload-artifact@v4 compute a least-common-
+        # ancestor of "/" and preserve each file's full absolute path
+        # inside the archive. That still works (Task 7's `find`-based
+        # lookups are depth-agnostic) but is needlessly deep. Stage into
+        # one directory first so the archive is flat instead.
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/x5h-bundle"
+          cp -f platforms/autosd/x5h/aib/x5h-rootfs.tar "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/Image-autosd" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/r8a78000-ironhide-uio-autosd.dtb" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel"/modules-*.tar "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/kernelrelease.txt" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/config-autosd.txt" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/provenance.txt" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/bspkernel/extract-ikconfig" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -rf "$RUNNER_TEMP/testimages" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f /tmp/x5h-gate.log "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          ls -lhR "$RUNNER_TEMP/x5h-bundle" || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x5h-gate-bundle
+          path: ${{ runner.temp }}/x5h-bundle
+          retention-days: 14
+          if-no-files-found: warn
