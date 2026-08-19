@@ -260,6 +260,11 @@ services:
         if [ -z "$1" ]; then
           set -- "$(ros2 pkg prefix --share scenario_test_runner)/scenario/sample.yaml"
         fi
+        # scenario_test_runner resolves "<model>_description" inside the
+        # third-party scenario_simulator_v2 image, which still ships the
+        # pre-rename sample_vehicle_description / sample_sensor_kit_description.
+        # Keep the legacy names here; VEHICLE_MODEL / SENSOR_MODEL name the
+        # packages that ship in the Open AD Kit component images instead.
         exec ros2 launch scenario_test_runner scenario_test_runner.launch.py \
           architecture_type:=${ARCHITECTURE_TYPE} \
           global_frame_rate:=${GLOBAL_FRAME_RATE} \
@@ -271,10 +276,10 @@ services:
           output_directory:=${OUTPUT_DIRECTORY} \
           record:=${RECORD} \
           scenario:="$1" \
-          sensor_model:=${SENSOR_MODEL} \
+          sensor_model:=sample_sensor_kit \
           use_custom_centerline:=${USE_CUSTOM_CENTERLINE} \
           use_sim_time:=${USE_SIM_TIME} \
-          vehicle_model:=${VEHICLE_MODEL}
+          vehicle_model:=sample_vehicle
     restart: "no"
 
   visualizer:
