@@ -33,6 +33,7 @@ RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
       --base-paths \
         /tmp/autoware/src/launcher/autoware_launch/autoware_launch \
         /tmp/autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_autoware_api_launch \
+        /tmp/autoware/src/launcher/autoware_launch/vehicle/sample_vehicle_launch \
         /tmp/autoware/src/universe/autoware_universe/system/autoware_default_adapi_universe \
         /tmp/autoware/src/universe/autoware_universe/system/autoware_diagnostic_graph_utils \
       --install-base /opt/autoware \

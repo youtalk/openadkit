@@ -33,6 +33,7 @@ RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
       --base-paths \
         /tmp/autoware/src/launcher/autoware_launch/autoware_launch \
         /tmp/autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_simulator_launch \
+        /tmp/autoware/src/launcher/autoware_launch/vehicle/sample_vehicle_launch \
         /tmp/autoware/src/universe/autoware_universe/simulator \
         /tmp/autoware/src/universe/autoware_universe/perception/autoware_shape_estimation \
         /tmp/autoware/src/universe/autoware_universe/perception/autoware_multi_object_tracker \

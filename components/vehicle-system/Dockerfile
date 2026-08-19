@@ -32,8 +32,10 @@ RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
     colcon build \
       --base-paths \
         /tmp/autoware/src/launcher/autoware_launch/autoware_launch \
+        /tmp/autoware/src/launcher/autoware_launch/sensor_kit/sample_sensor_kit_launch \
         /tmp/autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_vehicle_launch \
         /tmp/autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_system_launch \
+        /tmp/autoware/src/launcher/autoware_launch/vehicle/sample_vehicle_launch \
         /tmp/autoware/src/universe/autoware_universe/vehicle \
         /tmp/autoware/src/universe/autoware_universe/system \
         /tmp/autoware/src/universe/autoware_universe/localization/autoware_pose2twist \

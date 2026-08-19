@@ -34,6 +34,7 @@ RUN --mount=type=bind,source=autoware/src,target=/tmp/autoware/src \
         /tmp/autoware/src/launcher/autoware_launch/autoware_launch \
         /tmp/autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_localization_launch \
         /tmp/autoware/src/launcher/autoware_launch/tier4_universe_launch/tier4_map_launch \
+        /tmp/autoware/src/launcher/autoware_launch/vehicle/sample_vehicle_launch \
         /tmp/autoware/src/universe/autoware_universe/localization \
         /tmp/autoware/src/universe/autoware_universe/map \
         /tmp/autoware/src/universe/autoware_universe/sensing/autoware_pcl_extensions \
