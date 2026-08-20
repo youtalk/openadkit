@@ -260,25 +260,49 @@ memory than it was compiled to address, in the middle of the range it uses.
 this board — bootloader, FreeRTOS application, realtime regions, both CMA
 areas — with no gap of any size left over.
 
-**Moving the NPU's regions up is the obvious escape, and it may not be
-available.** The board has ample free memory above 4 GiB, and the vendor
-already places half of the NPU's regions up there, so the hardware plainly
-reaches it. But the precompiled model artifacts contain absolute physical
-addresses in the affected ranges, which points at a memory map fixed at
-compile time. If it is, changing it means recompiling the models, and the
-compiler is licensed under terms that make it a bench-only tool
-([companion-host.md](companion-host.md) describes the access tiers this
-interacts with).
+**Moving the NPU's regions up is the obvious escape, and it looks more
+available than this section first claimed.** The board has ample free memory
+above 4 GiB, and the vendor already places half of the NPU's regions up there,
+so the hardware plainly reaches it. An earlier draft asserted that the
+compiled model artifacts contain absolute physical addresses in the affected
+ranges, which would have fixed the map at model-compile time. That was checked
+and is wrong. The matches were quantized weight bytes, not pointers: counted
+against a uniform-noise expectation, the NPU ranges score *below* noise and a
+deliberately meaningless control range scores above it. A multi-megabyte
+weight file "contains" every 32-bit value; test a pointer claim against noise
+before building on it.
+
+What verifiably carries absolute addresses, from reading the tools rather
+than pattern-matching binaries: a 44-byte load-map file the compiler frontend
+writes next to each compiled model — and the frontend is plain Python with
+those constants written into one function, so that file is trivially
+regenerable for a different map; the runtime's own region table; and the
+device tree. The model binaries show no evidence of baked-in placement. So
+relocation looks like a runtime-and-device-tree question, not a
+recompile-everything question — but whether the runtime takes its region
+table from itself or from the driver is exactly the open vendor question, so
+this stays a question rather than a plan.
 
 So the honest summary is that the vendor's NPU configuration and this branch's
 realtime work are not, as shipped, configured to coexist — and whether that is
 a fixed property of the platform or of this release is not answerable from the
 material on hand. That question, and the ones about relocatability and the IPL,
 have gone to the vendor. What would unblock the work: confirmation that the NPU
-regions may be relocated, and how to build artifacts for a relocated map. What
-would end it differently: confirmation that they may not, in which case NPU
-bring-up and the realtime responder become alternative configurations of this
-board rather than a single one, and this document needs a different shape.
+regions may be relocated, and where the runtime takes its region table from.
+What would end it differently: confirmation that they may not, in which case
+NPU bring-up and the realtime responder become alternative configurations of
+this board rather than a single one, and this document needs a different shape.
+
+Separately, the model-compile pipeline itself is no longer a gap: with the
+compiler licence in hand, the runtime release's own generation script
+reproduces the shipped sample artifacts on the development host — the 44-byte
+load map comes out byte-identical — so if relocation does turn out to need
+recompilation, the machinery for it is already proven. Two environment potholes
+on a current distribution, recorded because both fail after the *frontend*
+succeeds: the compiler backend needs two superseded shared libraries the OS no
+longer ships, and the frontend *replaces* the library path environment for the
+backend subprocess rather than appending to it — so stage those libraries in
+the backend's own directory, where its launcher actually looks.
 
 None of this touches Stage 0, the driver build, the udev rules or the runtime
 container. All four are done and verified on hardware, and none of them left
