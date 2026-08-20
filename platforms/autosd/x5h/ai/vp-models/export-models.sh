@@ -7,6 +7,10 @@
 # "auto{drive,steer,speed}_<precision>.onnx" and vision_pilot.conf sets
 # model.precision = fp32 -- so those three fp32 files are what "the models
 # VisionPilot runs" means here.
+#
+# The extracted models declare a symbolic batch dimension, which the NNAC
+# frontend cannot compile. Pin it with fix-static-shapes.py (needs the host
+# venv's onnx) before compiling anything from them.
 set -euo pipefail
 VP_REPO=https://github.com/autowarefoundation/autoware_vision_pilot.git
 VP_COMMIT=bdbfc328b822f9820d0dc14a7979beb4dfb8f3a9
