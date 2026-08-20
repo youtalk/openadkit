@@ -35,6 +35,10 @@ answered before board time.
 - [Companion host](companion-host.md) — always-on bench gateway that keeps
   the board reachable remotely and scopes external developers' access.
   Executed and verified on hardware, 2026-08-10.
+- [Component stack](component-stack.md) — the Open AD Kit MRM demo as five
+  Quadlet units, with the trajectory follower on the CR52 (issue #120 M7):
+  staging, unit ordering, the three smoke modes and the MRM-chain oracle,
+  and why the scenario's junit is red on a healthy board.
 
 ## Folder Structure
 
