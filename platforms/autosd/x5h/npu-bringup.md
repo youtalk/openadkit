@@ -4,13 +4,19 @@ What has to be true before the ONNX Runtime Renesas execution provider can
 reach the NPU from AutoSD, in what order to do it, and how to get back if a
 step goes wrong.
 
-> **Status: Stage 0 executed 2026-08-10. Stage 1 started, then stopped.** The
-> driver build is done and verified on the board. The device-tree step is not,
-> and is now blocked on a question put to the vendor: the NPU's own allocation
-> map and this branch's realtime reserved regions do not merely collide, they
-> appear to be mutually exclusive. See [Where this stops](#where-this-stops).
-> Everything stated below as measured was measured on the board; Stage 2
-> remains designed and untried.
+> **Status: Stage 0 executed 2026-08-10. Stage 1 reached NPU execution
+> 2026-08-21 — the ONNX Runtime Renesas provider runs a model on the NPU on
+> this board.** The stock realtime IPL turned out to be sufficient, so Stage 2
+> is not required and remains designed and untried. What blocks a *useful* NPU
+> now is not this platform's integration but two defects in the vendor stack,
+> both reproducible from vendor material alone and both described in step 4: a
+> NULL dereference in the BSP remoteproc driver when the NPU device tree omits
+> the realtime core's reserved memory, and a kernel oops during model load that
+> reproduces with the vendor's own precompiled yolov5s sample. The NPU device
+> tree and this branch's realtime work still cannot run in one configuration —
+> see [Where this stops](#where-this-stops) — but that is now a known trade-off
+> rather than the thing in the way. Everything stated below as measured was
+> measured on the board.
 
 > **Numbers live elsewhere.** Flash offsets, device-tree addresses and
 > interrupt numbers come from the vendor SDK and are not in this repository —
@@ -167,21 +173,56 @@ Everything here is remote-capable. None of it touches flash.
    as a wheel built for one specific Python minor version, which this root
    filesystem does not carry — hence a container rather than a `pip install`.
 
-   **Run 2026-08-11: everything above the device node works, and the run stops
-   at the device node.** The provider loaded the artifacts, matched the model,
-   and dispatched every one of the fused graph's nodes to the NPU — `Conv`,
-   `Relu`, `Add`, `GlobalAveragePool`, `Flatten`, `Gemm`, `Softmax` — then the
-   backend's `RenesasBackendLoad` reported `Failed to open device /dev/npuc1`,
-   `driver_open failed: -1`, and ORT raised `Create state function failed`.
-   Nothing before that point is speculative any more: the wheel runs on this
-   board's CPU and kernel, the artifacts are readable, the EP registers, and
-   the only missing thing is the device the device tree does not describe.
+   **Run 2026-08-11: everything above the device node worked, and the run
+   stopped at the device node** — `RenesasBackendLoad` reported
+   `Failed to open device /dev/npuc1`, `driver_open failed: -1`, and ORT raised
+   `Create state function failed`. That was the state until the device tree was
+   actually tried.
 
-   `scripts/npu-probe.sh` is the check to run instead of reading that output by
-   eye. Today it stops at layer 2 with
+   **Run 2026-08-21: the NPU executes, and the blocker is now a kernel oops
+   rather than a missing device.** Booting the vendor's own NPU device tree
+   one-shot from U-Boot — no flash writes, no `saveenv`, so a power cycle
+   restores the normal self-boot — brings up `/dev/npuc0`, `/dev/npuc1` and the
+   contiguous-memory devices, the backend reports
+   `NPUDriverRuntime initialized successfully`, and the shipped ResNet18 sample
+   runs **on the NPU**. Three consequences:
+
+   - **The stock realtime IPL is sufficient.** This was the whole question this
+     step exists to answer, and the answer is yes: Stage 2 is not required to
+     reach NPU execution. Schedule it, if ever, as a performance question.
+   - **The vendor's NPU device tree omits the realtime core's reserved-memory
+     nodes, and the BSP remoteproc driver does not tolerate that.** The service
+     that boots the realtime core calls into a prepare hook that uses
+     `of_reserved_mem_lookup()` without checking for NULL, so the kernel oopses
+     roughly nine seconds into *every* boot of that device tree, before any NPU
+     work. Disable that service (and the RPMsg bridge above it) before the
+     experiment — losing the realtime core for that boot is already implied by
+     the device tree you are booting. `systemd.mask=` on the kernel command
+     line did **not** take effect here; `systemctl disable` did.
+   - **Loading a model can oops the kernel, and it reproduces on the vendor's
+     own artifacts.** On a boot with no prior oops, the precompiled yolov5s
+     sample — Renesas-built, single fused subgraph, no compiler licence
+     involved — faults with `Internal error: Oops - Undefined instruction`
+     during model load; printk dies immediately after `Modules linked in:`, RCU
+     stalls follow, and the board is unrecoverable without a power cycle. A
+     locally compiled 7-subgraph model at a larger input size fails the same
+     way. ResNet18 is the one that works. Since this needs nothing but vendor
+     material to reproduce, it is a vendor bug report, not a porting task.
+
+   **Where the kernel is loaded matters, and U-Boot's default is wrong for
+   this.** The stock load address falls inside one of the NPU's own reserved
+   regions, so that region's whole-area contiguous allocation fails with
+   `-EBUSY` — visible as one contiguous-memory device missing while the others
+   appear, and confirmable in `/proc/iomem`, which shows `Kernel code` inside
+   the region. Load the kernel outside every NPU region; read the addresses
+   from the SDK's own device tree at the time you do it, and note that U-Boot
+   marks every bank above the first as `no-map`, so `ext4load` there fails
+   outright with `** Reading file would overwrite reserved memory **`.
+
+   `scripts/npu-probe.sh` is the check to run instead of reading output by eye.
+   Without the NPU device tree it stops at layer 2 with
    `NPU_PROBE_FAIL reason=npuc_not_in_dtb sysfs_matches=0 uio_devices=177`,
-   which is the correct answer and exercises everything except the layers that
-   need the NPU present.
+   which is the correct answer for that configuration.
 
 ### Three traps in step 4, all measured
 
