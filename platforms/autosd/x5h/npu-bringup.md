@@ -6,14 +6,16 @@ step goes wrong.
 
 > **Status: Stage 0 executed 2026-08-10. Stage 1 reached NPU execution
 > 2026-08-21 — the ONNX Runtime Renesas provider runs a model on the NPU on
-> this board.** The stock realtime IPL turned out to be sufficient, so Stage 2
-> is not required and remains designed and untried. What blocks a *useful* NPU
-> now is not this platform's integration but two defects in the vendor stack,
-> both reproducible from vendor material alone and both described in step 4: a
-> NULL dereference in the BSP remoteproc driver when the NPU device tree omits
-> the realtime core's reserved memory, and a kernel oops during model load that
-> reproduces with the vendor's own precompiled yolov5s sample. The NPU device
-> tree and this branch's realtime work still cannot run in one configuration —
+> this board.** It ran on the stock bootloader, which is *not* the configuration
+> the vendor documents for this package: Stage 2 turns out to be a prerequisite
+> rather than the performance option this document once called it, and it
+> remains untried. Two things stand between here and a useful NPU, both in step
+> 4: a NULL dereference in the BSP remoteproc driver when the NPU device tree
+> omits the realtime core's reserved memory — a genuine vendor defect — and a
+> kernel oops during model load, which reproduces on the vendor's own yolov5s
+> sample but was only ever measured without the package's bootloader, so it is
+> not yet attributable to anyone. The NPU device tree and this branch's realtime
+> work still cannot run in one configuration —
 > see [Where this stops](#where-this-stops) — but that is now a known trade-off
 > rather than the thing in the way. Everything stated below as measured was
 > measured on the board.
@@ -187,9 +189,14 @@ Everything here is remote-capable. None of it touches flash.
    `NPUDriverRuntime initialized successfully`, and the shipped ResNet18 sample
    runs **on the NPU**. Three consequences:
 
-   - **The stock realtime IPL is sufficient.** This was the whole question this
-     step exists to answer, and the answer is yes: Stage 2 is not required to
-     reach NPU execution. Schedule it, if ever, as a performance question.
+   - **The stock bootloader reaches NPU execution, but it is not the configuration
+     the vendor documents.** A model runs, which answers the narrow question this
+     step was written around. It does not license the broader claim: the AI
+     package ships its **own** bootloader, and the manual's appendix describes
+     the change as turning DRAM ECC *off*. So Stage 2 is not the performance
+     afterthought this document previously called it — it is the documented
+     prerequisite, and everything below about model load failing was measured
+     without it.
    - **The vendor's NPU device tree omits the realtime core's reserved-memory
      nodes, and the BSP remoteproc driver does not tolerate that.** The service
      that boots the realtime core calls into a prepare hook that uses
@@ -199,15 +206,29 @@ Everything here is remote-capable. None of it touches flash.
      experiment — losing the realtime core for that boot is already implied by
      the device tree you are booting. `systemd.mask=` on the kernel command
      line did **not** take effect here; `systemctl disable` did.
-   - **Loading a model can oops the kernel, and it reproduces on the vendor's
-     own artifacts.** On a boot with no prior oops, the precompiled yolov5s
-     sample — Renesas-built, single fused subgraph, no compiler licence
-     involved — faults with `Internal error: Oops - Undefined instruction`
-     during model load; printk dies immediately after `Modules linked in:`, RCU
-     stalls follow, and the board is unrecoverable without a power cycle. A
-     locally compiled 7-subgraph model at a larger input size fails the same
-     way. ResNet18 is the one that works. Since this needs nothing but vendor
-     material to reproduce, it is a vendor bug report, not a porting task.
+   - **Loading a model can oops the kernel, on the vendor's own artifacts, with
+     the documented prerequisite absent.** On a boot with no prior oops, the
+     precompiled yolov5s sample — Renesas-built, single fused subgraph, no
+     compiler licence involved — faults with
+     `Internal error: Oops - Undefined instruction` during model load; printk
+     dies immediately after `Modules linked in:`, RCU stalls follow, and the
+     board is unrecoverable without a power cycle. A locally compiled
+     7-subgraph model at a larger input size fails the same way. ResNet18, the
+     smallest, is the one that works.
+
+     **Do not report this as a vendor defect yet.** Every one of those runs used
+     the stock bootloader, i.e. with DRAM ECC on, and the vendor's own appendix
+     says the AI package's bootloader turns it off. The vendor's release notes
+     also already record timeout-class failures on particular models
+     (`OTLINT-22806`, naming HRNet, PointPillars and a YOLOv5 variant), which is
+     the same family as the `timeout:reg` lines these runs print. The honest
+     order of work is Stage 2 first, then re-measure, then report what survives.
+
+     What can be ruled out cheaply, and was: the runtime's ARC control-core
+     firmware is **present** in the board container — the wheel ships its own
+     `arc_prog_npu{s,n}` sets, `vpx0.bin` included — so "the control cores were
+     never programmed" is not the explanation. Check that before theorising, by
+     listing the runtime package inside the container; it needs no board reboot.
 
    **Where the kernel is loaded matters, and U-Boot's default is wrong for
    this.** The stock load address falls inside one of the NPU's own reserved
