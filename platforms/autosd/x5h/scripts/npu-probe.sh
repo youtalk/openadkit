@@ -36,6 +36,24 @@ for d in /dev/npuc0 /dev/npuc1; do
   [ -r "$d" ] && [ -w "$d" ] || fail "npuc_mode dev=$d ($(ls -l "$d"))"
 done
 
+# --- layer 3.5: the kernel is still intact ------------------------------
+# Measured 2026-08-21: a run can print correct latencies on a kernel that has
+# already oopsed, so a plausible number is not evidence of a healthy board.
+# Two oops sources are known here, and both are worth naming rather than
+# reporting as "it crashed":
+#   * rcar_gen5_rproc_prepare -> of_reserved_mem_lookup, when the booted dtb
+#     describes the realtime cores but not their reserved memory (the vendor
+#     NPU dtb does exactly that). Stop whatever starts the realtime core.
+#   * an undefined-instruction fault during model load, which takes printk
+#     with it and leaves the board needing a power cycle.
+# Refuse to measure on a damaged kernel; the numbers would not mean anything.
+if dmesg 2>/dev/null | grep -q 'Internal error'; then
+  if dmesg | grep -q 'rcar_gen5_rproc_prepare'; then
+    fail "kernel_oopsed_remoteproc (dtb lacks the realtime reserved-memory nodes; disable the service that boots it)"
+  fi
+  fail "kernel_oopsed ($(dmesg | grep -m1 'Internal error'))"
+fi
+
 # --- layer 4: contiguous memory ----------------------------------------
 # cmem0 comes from the default CMA and proves only that the module loaded.
 # The runtime wants cmem_other*, which exist one per phandle in /cmem's
@@ -43,6 +61,27 @@ done
 # argument to tune (npu-bringup.md).
 lsmod | grep -q '^cmemdrv' || fail cmem_not_loaded
 ls /dev/cmem_other* >/dev/null 2>&1 || fail cmem_other_missing
+
+# A *short count* is the trap, not a zero count. /cmem's memory-region list is
+# one 4-byte phandle per region, so the expected number is knowable; and when
+# one region short-changes you, the runtime fails at "Failed to open device
+# /dev/cmem_otherN" -- which points at the driver, not at the real cause.
+#
+# The real cause, measured 2026-08-21: U-Boot's default kernel_addr_r places
+# the kernel INSIDE one of the npu_region ranges. Those regions are declared
+# reusable, so Linux boots and looks healthy, but cmem's whole-region
+# allocation then returns -EBUSY for that one region. Load the kernel outside
+# every npu_region and all of them allocate.
+phandles=/proc/device-tree/cmem/memory-region
+if [ -r "$phandles" ]; then
+  want=$(( $(wc -c < "$phandles") / 4 ))
+  have=$(ls -d /dev/cmem_other* 2>/dev/null | wc -l)
+  if [ "$have" -lt "$want" ]; then
+    node=$(dmesg | sed -n 's/.*assigned reserved memory node \(linux,npu_region[^ ]*\).*/\1/p' | tail -1)
+    kline=$(grep -i 'kernel code' /proc/iomem 2>/dev/null | head -1)
+    fail "cmem_other_short have=$have want=$want failed_node=${node:-unknown} kernel=${kline:-unknown} (is the kernel loaded inside an npu_region?)"
+  fi
+fi
 
 # --- layer 5: the runtime container -------------------------------------
 podman image exists "$IMAGE" || fail "image_missing image=$IMAGE"
@@ -69,14 +108,38 @@ done
 # and starts with that directory's own name ("resnet18_artifacts/nnx/..."), so
 # the mount point has to keep the directory name. Mounting it as /work/artifacts
 # makes the backend look for /work/resnet18_artifacts and miss.
+# The manifest records where the artifacts were compiled, and it is not always
+# relative. The shipped samples record a relative "resnet18_artifacts/nnx/..."
+# resolved against the artifacts directory's PARENT, so the mount point must
+# keep the directory name -- mounting it as /work/artifacts makes the backend
+# look for /work/resnet18_artifacts and miss. Locally compiled artifacts record
+# the ABSOLUTE compile-host path instead, and the backend fopen()s it verbatim,
+# so there the mount point must BE that path. Read it rather than assuming.
 art_name=$(basename "$ARTIFACTS")
+recorded=$(sed -n 's/.*"artifact_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+             "$ARTIFACTS/nnx/manifest.json" 2>/dev/null | head -1)
+case "$recorded" in
+  /*) # absolute: strip the trailing /nnx/<subgraph> to get the recorded dir
+      art_target=$(dirname "$(dirname "$recorded")") ;;
+  "") fail "manifest_unreadable path=$ARTIFACTS/nnx/manifest.json" ;;
+  *)  art_target="/work/$art_name" ;;
+esac
+
+# Device passthrough is the least-privilege form and is what this asserts. If
+# the backend fails to mmap despite the nodes being present, retry by hand with
+# "--privileged -v /dev:/dev", which is what the 2026-08-21 board session used;
+# treat needing it as a finding worth writing down rather than a fix.
 out=$(podman run --rm $devs \
-        -v "$ARTIFACTS":"/work/$art_name":ro \
+        -v "$ARTIFACTS":"$art_target":ro \
         -v "$SCRIPT":/work/eval.py:ro \
-        "$IMAGE" python /work/eval.py --artifacts "/work/$art_name" 2>&1)
+        "$IMAGE" python /work/eval.py --artifacts "$art_target" 2>&1)
 echo "$out"
 echo "$out" | grep -q 'Error occurred:' && fail "runtime_error ($(echo "$out" | grep -m1 'Error occurred:'))"
 echo "$out" | grep -q 'providers:.*RenesasExecutionProvider' || fail ep_not_selected
 echo "$out" | grep -q 'avg Latency' || fail no_latency_result
 
-echo "NPU_PROBE_PASS uio=$uio_count npuc=$npuc_sysfs cmem_other=$(ls -d /dev/cmem_other* | wc -l)"
+# The run can complete and still have killed the kernel, so check again after.
+dmesg 2>/dev/null | grep -q 'Internal error' \
+  && fail "kernel_oopsed_during_run ($(dmesg | grep -m1 'Internal error'))"
+
+echo "NPU_PROBE_PASS uio=$uio_count npuc=$npuc_sysfs cmem_other=$(ls -d /dev/cmem_other* | wc -l) artifacts=$art_target"
