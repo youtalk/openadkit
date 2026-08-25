@@ -660,6 +660,88 @@ The board's own sshd is key-only (`PasswordAuthentication no`,
 password is not a network credential. It still works on the serial
 console, which is deliberate — that is the recovery path.
 
+### Board roles: one shared board, one NPU appliance
+
+The two boards are not interchangeable, and the split is the reason the bench
+works for more than one person at a time:
+
+| | Board 1 `192.168.0.20` | Board 2 `192.168.0.21` |
+|---|---|---|
+| Identity | `autosd-x5h` | `yocto-x5h-2`, or `autosd-x5h-2` on its fallback |
+| Default boot | AutoSD self-boot from UFS | Yocto self-boot from its own second UFS LUN |
+| Purpose | everything except NPU work | NPU verification only |
+| Access | admin, dev and ext tiers | admin only |
+
+Board 1 is the shared board: the CR52 payload with `rpmsg-eth`, the component
+stack, and every non-NPU check live there, and it is the only board external
+developers can reach. Board 2 absorbs the work that reboots, resets and wedges
+hardware, so nobody has to coordinate with it.
+
+**Do not run NPU work on board 1.** Its device tree and boot configuration are
+frozen for that reason.
+
+The hostname carries the personality deliberately. Board 2 has two — a Yocto
+NPU appliance and a dormant AutoSD fallback — and `hostname` alone tells an
+operator which board *and* which system they are on. That removes an error
+class this bench has already paid for.
+
+**Both boards run with DRAM ECC off.** Each carries the AI-package bootloader,
+whose documented effect is to disable ECC. This is a standing confounder: any
+memory-corruption-shaped fault on either board has it as an open variable, and
+it should be stated in a bug report rather than discovered by the next person.
+
+### The second board's dual layout
+
+Board 2 carries two 32 GiB UFS LUNs. The first holds the AutoSD install and is
+never written by the NPU work; the second was empty from the factory and now
+holds the appliance:
+
+| LUN | partlabel | size | contents |
+|---|---|---|---|
+| `ufs-scsi-0:0:0:1` | `x5h-boot` / `x5h-root` / `autosd-store` | 1 / 12 / 19 GiB | the AutoSD fallback, container store included |
+| `ufs-scsi-0:0:0:2` | `yocto-boot` / `yocto-root` / `npu-work` | 1 / 8 / 23 GiB | kernel and device tree, BSP rootfs, working area |
+
+Because the AutoSD LUN is untouched, the fallback is a complete AutoSD board
+rather than a rescue shell — booting it gives back the container store as
+well. Select it from U-Boot with `run bootcmd_autosd_ufs`; the saved `bootcmd`
+stays on the appliance.
+
+**Address partitions by partlabel and disks by `by-path`, never by
+`/dev/sdX`.** Letters are assigned in probe order and move: flashing the
+bootloader shifted every letter on this board by one, because the erase step
+changes what the small boot LUNs present. The same caution applies in U-Boot,
+where the boot device number is not guaranteed either — the appliance's
+`bootcmd` probes candidate LUs in turn rather than hardcoding one, and that
+fallback has been exercised deliberately, not just written.
+
+Two things about the environment are worth knowing before a flash:
+
+- **The saved U-Boot environment lives on eMMC, not on UFS.** That is why a
+  bootloader flash, whose erase covers the UFS boot LUNs, leaves `bootcmd` and
+  the boot arguments intact.
+- **The board's ssh host key differs between its two personalities.** A host
+  key change after switching systems is expected; do not pin board 2's key.
+
+### Unattended recovery on the NPU board
+
+The NPU board is expected to be wedged by the work it exists for, so it has
+two independent automatic recovery paths, both verified on hardware:
+
+- **The hardware watchdog.** `systemd` holds `/dev/watchdog0` and pets it at
+  half the hardware timeout. The timeout is fixed in hardware and cannot be
+  changed, and the device does not support magic close — once opened, it
+  cannot be disarmed by closing it. An expiry resets the SoC and the
+  bootloader re-runs, bringing the appliance back on its own.
+- **`panic=10`.** A kernel panic reboots the board unattended.
+
+What is *not* established is the case of a kernel hung so hard that printk is
+dead. The chain — a hung kernel stops `systemd` petting, the watchdog expires,
+the board resets — is sound, but it rests on the hung kernel leaving the
+watchdog clocked, and that step has not been measured. It could not be tested
+because the fault that used to produce it no longer reproduces on the current
+bootloader and kernel load address. Treat unattended work on the NPU board as
+well protected, not guaranteed.
+
 ### Device key expiry on the gateway
 
 A user-owned node's device key expires (180 days by default). When it does,
@@ -891,6 +973,24 @@ Comparing `/proc/sys/kernel/random/boot_id` either side of the reset is a
 cheap way to prove the board actually reset rather than merely stayed up.
 
 ## Failure modes paid for in hardware
+
+**The stock BSP image is not ready to be an appliance.** Four defects each
+produce a board that boots and is then unusable, and all four are silent: it
+ships an `/etc/hostname` that overrides the `ip=` bootarg's hostname; it
+enables no ssh unit at all, so the board comes up reachable only over serial;
+`/var/tmp` is a symlink onto tmpfs, so a working area placed there by
+convention lands in RAM; and the network daemon is enabled with an empty
+configuration directory, which leaves address assignment to whatever the
+kernel bootarg did and nothing to reassert it. Fix them in the image, and
+assert each one after the first boot.
+
+**A serial device name is not a serial device.** Persistent names key on the
+port the adapter is plugged into on the companion, not on the board it leads
+to. Moving a cable at the *board* end therefore keeps the name and changes the
+meaning. Before any operation that drives a serial port by name — a flash
+above all — confirm what is actually on the other end, and check whether a
+console multiplexer is already holding it open.
+
 
 **The bench link can come up unusable after returning from a netboot
 rescue.** Symptom: the board boots fine from UFS and the console is healthy,
