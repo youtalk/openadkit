@@ -4,21 +4,29 @@ What has to be true before the ONNX Runtime Renesas execution provider can
 reach the NPU from AutoSD, in what order to do it, and how to get back if a
 step goes wrong.
 
-> **Status: Stage 0 executed 2026-08-10. Stage 1 reached NPU execution
-> 2026-08-21 — the ONNX Runtime Renesas provider runs a model on the NPU on
-> this board.** It ran on the stock bootloader, which is *not* the configuration
-> the vendor documents for this package: Stage 2 turns out to be a prerequisite
-> rather than the performance option this document once called it, and it
-> remains untried. Two things stand between here and a useful NPU, both in step
-> 4: a NULL dereference in the BSP remoteproc driver when the NPU device tree
-> omits the realtime core's reserved memory — a genuine vendor defect — and a
-> kernel oops during model load, which reproduces on the vendor's own yolov5s
-> sample but was only ever measured without the package's bootloader, so it is
-> not yet attributable to anyone. The NPU device tree and this branch's realtime
-> work still cannot run in one configuration —
-> see [Where this stops](#where-this-stops) — but that is now a known trade-off
-> rather than the thing in the way. Everything stated below as measured was
-> measured on the board.
+> **Status: the NPU runs. Stage 0 executed 2026-08-10; Stage 1 reached NPU
+> execution 2026-08-21; Stage 2 — the AI-package bootloader — was flashed on
+> 2026-08-25 and is what made the NPU useful rather than merely reachable.**
+> Two findings supersede what this document used to say. First, **the kernel
+> oops during model load was the kernel load address**: loading at the
+> vendor-documented address instead of the one the bench had been using removes
+> it, and the vendor's own yolov5s sample — the reproducer this document once
+> offered as a bug report — now runs to completion. Do not report it. Second,
+> **NPU verification no longer shares a board with the realtime work**: a
+> second board self-boots Yocto with the NPU device tree as a dedicated
+> appliance, which dissolves the coexistence problem below by separating the
+> two rather than reconciling them.
+>
+> What still stands: the NPU device tree omits the realtime core's reserved
+> memory, so **the NPU dtb and this branch's realtime work still cannot run in
+> one configuration** — see [Where this stops](#where-this-stops) — and the
+> NULL dereference in the BSP remoteproc driver that follows from that omission
+> is a genuine vendor defect, reportable on its own. Everything stated below as
+> measured was measured on hardware.
+>
+> Board roles and the appliance's layout are in
+> [companion-host.md](companion-host.md); the measured NPU figures stay in the
+> working area, outside this repository.
 
 > **Numbers live elsewhere.** Flash offsets, device-tree addresses and
 > interrupt numbers come from the vendor SDK and are not in this repository —
