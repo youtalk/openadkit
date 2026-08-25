@@ -13,6 +13,13 @@ the room, and it is where external developers' access is scoped.
 > `NEGATIVE_ACCESS_PASS`, `REMOTE_REHEARSAL_PASS`. Everything the first draft
 > got wrong is corrected in place, and the reasons are kept alongside the
 > commands so they do not have to be rediscovered.
+>
+> **Extended to a second board, 2026-08-25.** The bench now carries two X5H
+> boards on one segment behind an unmanaged switch, with udev-persistent
+> serial console names. Markers added: `BOARD2_COLDBOOT_PASS`,
+> `BOARD2_RESCUE_PASS`. Executing that work also showed the Yocto rescue
+> environment published here had never been functional; it is corrected in
+> [Netboot rescue](#netboot-rescue-through-the-companion).
 
 ## Why a separate machine
 
@@ -65,14 +72,21 @@ flowchart TB
 
   subgraph BENCH["Bench LAN 192.168.0.0/24 — unauthenticated services live only here"]
     direction TB
-    BOARD["R-Car X5H — tsn5 192.168.0.20<br/>AutoSD self-boot from UFS<br/>sshd key-only, everyone lands as root"]
+    HUB["Unmanaged GbE switch<br/>companion and both boards, one segment"]
+    BOARD["R-Car X5H #1 — tsn5 192.168.0.20<br/>AutoSD self-boot from UFS<br/>sshd key-only, everyone lands as root"]
     CR52["CR52 realtime core<br/>firmware slot on UFS, written from Linux<br/>reboot = PSCI cold reset, restarts it too"]
+    BOARD2["R-Car X5H #2 — tsn5 192.168.0.21<br/>AutoSD self-boot from UFS<br/>administrator-only: no dev/ext grant names it"]
+    CR52B["CR52 realtime core<br/>same slot layout as #1"]
     BOARD --- CR52
+    BOARD2 --- CR52B
+    HUB --> BOARD
+    HUB --> BOARD2
   end
 
-  BIF -- "ssh root@192.168.0.20" --> BOARD
+  BIF -- "ssh root@192.168.0.20 · root@192.168.0.21" --> HUB
   SERIAL -- "USB serial — the only way back when the PHY wedges" --> BOARD
-  RESCUE -- "TFTP kernel/dtb + NFS root (rescue boot only)" --> BOARD
+  SERIAL -- "second FTDI adapter, udev-named" --> BOARD2
+  RESCUE -- "TFTP kernel/dtb + NFS root — one board at a time" --> HUB
   UPLINK -- "container pulls, DNS 1.1.1.1 / 8.8.8.8" --> NET(["Internet"])
 
   classDef tier fill:#e8f0fe,stroke:#4285f4,color:#111
@@ -138,6 +152,15 @@ The companion takes over `192.168.0.1`, the address the board's kernel
 command line already uses as its gateway, so nothing on the board changes
 when the cables move. `serverip` in the board's saved U-Boot environment is
 the same address, so the netboot rescue paths also need no edit.
+
+With more than one board, put an **unmanaged Gigabit switch** between `<BIF>`
+and the boards rather than giving each board its own NIC. Everything that
+makes this host a boundary is then untouched by the second board: the
+firewall rules match on interface name, the advertised tailnet route is
+already a `/24`, the NFS exports are scoped to the subnet, and the ACL names
+hosts. Adding board `192.168.0.21` therefore changes no rule in any of them —
+the only companion-side change the second board forces is persistent serial
+naming, below.
 
 ```sh
 sudo nmcli con add type ethernet ifname <BIF> con-name x5h-lan \
@@ -355,6 +378,77 @@ unreadable until you log in again — or until the reboot drill below. The
 console helper scripts derive their log directory from their own location, so
 they work from any checkout path.
 
+### Persistent serial console names
+
+With one board, `ttyUSB0`/`ttyUSB1` are unambiguous. With two FTDI adapters
+they are not: the numbers are handed out in enumeration order, so a replug, a
+reboot, or powering the boards up in a different order can silently point
+board 1's console at board 2. Every command in this document that reaches a
+console would then reach the wrong board. Do this **before** the second
+adapter is ever plugged in.
+
+Inventory the adapters one at a time and key a udev rule on something stable:
+
+```sh
+for d in /dev/ttyUSB*; do
+  echo "== $d"
+  udevadm info -q property "$d" \
+    | grep -E 'ID_SERIAL_SHORT|ID_USB_INTERFACE_NUM|ID_PATH=|ID_MODEL='
+done
+```
+
+On a dual-UART adapter, interface `00` is the APU console and `01` is the
+CR52 console — one cable carries both, because the connector is the board's
+own dual-UART USB port rather than a companion-side dongle. Unplugging it
+removes both consoles at once.
+
+If the adapters carry distinct `ID_SERIAL_SHORT` values, key on those:
+
+```
+# /etc/udev/rules.d/70-x5h-serial.rules
+SUBSYSTEM=="tty", ENV{ID_SERIAL_SHORT}=="<SER1>", ENV{ID_USB_INTERFACE_NUM}=="00", SYMLINK+="x5h1-apu"
+SUBSYSTEM=="tty", ENV{ID_SERIAL_SHORT}=="<SER1>", ENV{ID_USB_INTERFACE_NUM}=="01", SYMLINK+="x5h1-cr52"
+SUBSYSTEM=="tty", ENV{ID_SERIAL_SHORT}=="<SER2>", ENV{ID_USB_INTERFACE_NUM}=="00", SYMLINK+="x5h2-apu"
+SUBSYSTEM=="tty", ENV{ID_SERIAL_SHORT}=="<SER2>", ENV{ID_USB_INTERFACE_NUM}=="01", SYMLINK+="x5h2-cr52"
+```
+
+FTDI cables are often shipped **unserialised**, in which case both adapters
+report the same blank serial and the rules above would match both. Key on
+`ID_PATH` instead — it already encodes the interface, so it stands alone:
+
+```
+SUBSYSTEM=="tty", ENV{ID_PATH}=="<path-of-1-apu>",  SYMLINK+="x5h1-apu"
+SUBSYSTEM=="tty", ENV{ID_PATH}=="<path-of-1-cr52>", SYMLINK+="x5h1-cr52"
+SUBSYSTEM=="tty", ENV{ID_PATH}=="<path-of-2-apu>",  SYMLINK+="x5h2-apu"
+SUBSYSTEM=="tty", ENV{ID_PATH}=="<path-of-2-cr52>", SYMLINK+="x5h2-cr52"
+```
+
+`ID_PATH` names the physical USB port, so this variant makes the companion's
+two USB ports **fixed bench wiring**. Label them physically; moving a cable
+between ports now renames a board.
+
+```sh
+sudo udevadm control --reload
+sudo udevadm trigger --subsystem-match=tty
+udevadm settle
+ls -l /dev/x5h1-apu /dev/x5h1-cr52 /dev/x5h2-apu /dev/x5h2-cr52
+```
+
+`udevadm trigger` is asynchronous — without `settle` the symlinks may not
+exist yet and the check reports a failure that is really a race.
+
+Prove identity by writing a marker from a board you can already reach, rather
+than trusting that `tio` printed `Connected`:
+
+```sh
+ssh root@192.168.0.20 'echo SERIAL_RENAME_CHECK_1 > /dev/console'
+```
+
+It must appear in the `x5h1` APU session and nowhere else. Restart the `tio`
+sessions one at a time onto the new names — the CR52 console must never have
+two concurrent readers — and after this, **nothing may reference
+`/dev/ttyUSB*` directly**, in scripts, units, or notes.
+
 Vendor SDK material stays off this list unless the companion is
 administrator-only; it must not become reachable from a shared tailnet. None
 of the four objectives needs it.
@@ -412,6 +506,7 @@ flowchart LR
   end
 
   subgraph Z3["Zone 3 — administrator only"]
+    BOARD2Z["Board 2 — 192.168.0.21, every port<br/>no dev/ext grant names this address"]
     REST["Board ports other than 22<br/>and the companion's other services"]
     TAILNET["Every other machine on the tailnet<br/>this is why the admin grant must stay dst:*"]
     CONSOLE["Tailscale admin console<br/>ACL edits, route approval, onboarding<br/>not gated by ACLs — always the way back"]
@@ -520,6 +615,46 @@ Keep the admin console open after saving and confirm you can still reach your
 own machines before considering it done. ACLs do not gate console access, so
 the console is always the way back.
 
+### Additional boards are administrator-only by default
+
+The dev and ext grants above name `192.168.0.20` **literally**, not the bench
+subnet. That is deliberate, and it is what makes a second board private
+without editing a single rule: `192.168.0.21` is reachable by the admin tier
+(whose grant is `dst: *`) and by nobody else. Widening those grants to
+`192.168.0.0/24` for convenience would silently hand every external developer
+each future board, so name addresses one at a time.
+
+The boundary is worth testing rather than assuming, and the test needs a
+positive control — two probes whose results must *differ*:
+
+```sh
+timeout 6 tailscale nc 192.168.0.20 22 </dev/null; echo "board1: $?"   # expect 0
+timeout 6 tailscale nc 192.168.0.21 22 </dev/null; echo "board2: $?"   # expect 124
+```
+
+Identical statuses mean the probe is broken, not that the boundary holds. The
+`124` is a timeout because an ungranted destination is dropped rather than
+refused; a `0` on board 2 would mean the grant leaked.
+
+### What differs on the second board
+
+Provisioning replays the first board's procedure. Only three things change,
+and keeping the list this short is the point:
+
+- **The U-Boot environment**, [`selfboot-env-x5h2.txt`](uboot/selfboot-env-x5h2.txt) —
+  identical to board 1's but for the address and the hostname, both of which
+  live in the `ip=` bootarg.
+- **The hostname**, `autosd-x5h-2`. Note that the rootfs image ships an
+  `/etc/hostname`, and that file wins over the `ip=` bootarg's hostname
+  field — so it must be edited in the image. A board that insists it is
+  `autosd-x5h` on the network as `.21` has an unedited image, not a broken
+  bootarg. The netbooted rescue roots are shared and will always announce
+  the name baked into them, which is expected.
+- **`authorized_keys.d/root` holds the administrator key only.** Do not
+  clone the first board's file: on a shared bench it accumulates developer
+  keys, and copying it would grant the external tier a board the ACL
+  deliberately keeps private. Assert the contents rather than overwriting.
+
 The board's own sshd is key-only (`PasswordAuthentication no`,
 `PermitRootLogin prohibit-password`), so the well-known development root
 password is not a network credential. It still works on the serial
@@ -602,6 +737,18 @@ Use `grep -q`, not `sed -n /:69/p`: `sed` exits 0 whether or not it matched,
 so as a link in an `&&` chain it can never fail and the check silently proves
 nothing.
 
+The serial names are part of the drill too, because a udev rule that was
+never reloaded from disk works until exactly this moment:
+
+```sh
+ssh <companion> 'ls -l /dev/x5h1-apu /dev/x5h1-cr52 /dev/x5h2-apu /dev/x5h2-cr52'
+```
+
+All four must exist. The `tio`/`tmux` sessions do **not** survive the reboot
+unless they have been made into units, so restart them and re-prove identity
+with a marker from each board (`echo SERIAL_NAMES_CHECK_B1 > /dev/console` on
+`.20`, `…_B2` on `.21`), confirming each lands in its own APU log.
+
 ### Access tiers
 
 From an admin node:
@@ -656,16 +803,53 @@ interface scope as udp/2049, so the NFS result covers it by construction.
 
 ### Netboot rescue through the companion
 
+**Only one board may be netbooted at a time.** Both rescue trees are exported
+`rw,no_root_squash` to the whole subnet and neither is per-board, so two
+boards on an NFS root are two machines writing the same filesystem as root.
+Keep every other board on UFS self-boot — its default — for the duration.
+
 One-shot boots from the U-Boot prompt; neither writes the environment, so
 the board returns to UFS self-boot on the next reset with nothing to undo.
 `printenv` first, as always.
 
 ```
-=> printenv bootcmd bootcmd_yocto bootcmd_autosd
+=> printenv bootcmd bootcmd_yocto bootargs_yocto bootcmd_autosd bootargs_autosd
 => ping 192.168.0.1            # host is alive -> the bench path works
 => run bootcmd_yocto           # TFTP kernel+dtb, NFS root /export/rfs
 => run bootcmd_autosd          # TFTP kernel+dtb, NFS root /export/rfs-autosd
 ```
+
+Include the `bootargs_*` variables in that `printenv`, not just the
+`bootcmd_*` ones. Earlier revisions of this document published a
+`bootcmd_yocto` that ran `tftp … && tftp … && booti …` and **set no bootargs
+at all**, leaving the BSP kernel to inherit whatever ambient `bootargs`
+happened to be — which, after a clean reset, is nothing. The rescue path
+looked present and was not: it booted a kernel with no root filesystem. If
+`printenv bootargs_yocto` answers `## Error: "bootargs_yocto" not defined`,
+the environment on that board predates this fix and its Yocto rescue does not
+work. Re-import [`selfboot-env.txt`](uboot/selfboot-env.txt) (or
+[`selfboot-env-x5h2.txt`](uboot/selfboot-env-x5h2.txt) for board 2) and
+`saveenv`.
+
+Do not repair it by hand-typing an `ip=` at the prompt. The short form
+`ip=192.168.0.21` neither disables autoconfiguration nor pins an interface,
+so the kernel falls back to DHCP across every `tsn*` port and loops in
+`IP-Config: Retrying forever (NFS root)` with no userspace and no shell. That
+state has no remote exit — a serial `SysRq` cannot reset the board because
+this distro's `kernel.sysrq` mask does not include the reboot bit — and it
+costs a physical power cycle. Use the full form, which pins the interface
+(`tsn5`) and disables autoconf (`none`):
+
+```
+ip=<board-ip>:::::tsn5:none root=/dev/nfs nfsroot=192.168.0.1:/export/rfs,v3,tcp rw
+```
+
+**Both rescue roots also need `pd_ignore_unused clk_ignore_unused`.** Without
+them the BSP kernel gates a clock it still needs and stops dead at
+`clk: Disabling unused clocks` — no further output, no network, console
+silent at every baud, indistinguishable from a hung board. A healthy boot on
+this hardware always logs `clk: Not disabling unused clocks` — note the
+negation. The affirmative form is the diagnosis, not noise.
 
 Confirm on the booted system that the root really is the companion's export,
 rather than trusting that the command ran:
@@ -721,6 +905,10 @@ Another `reboot` clears it. Since the network is what is broken, that reboot
 has to be issued over serial — which is the concrete reason the companion
 holds the consoles rather than merely being near the board.
 
+This applies to every board on the bench, not just the first one. Re-cabling
+any board — moving it onto the switch included — earns a deliberate reboot
+before its link is trusted.
+
 **Do not treat a timeout as a dead board.** A good reset answers again in
 about 30 seconds; a link that fails to negotiate can leave the board silent
 for minutes and then recover on its own. Polling for 155 seconds and
@@ -733,6 +921,51 @@ built on a stable MAC — DHCP reservations, MAC filtering, static ARP entries
 
 **The board has no RTC or NTP on the bench LAN**, so its log timestamps are
 wrong by days. Correlate against the companion's clock, not the board's.
+
+**A factory-fresh board needs its bootloader chain flashed to the bench's
+generation before any provisioning.** This is a prerequisite, not a detail,
+and it is the single easiest way to lose a bench session. Symptom signature:
+the board is perfectly stable in U-Boot, boots Linux, and then halts at a
+*varying* point with `ETIMEDOUT` on unrelated peripherals. That pattern reads
+like failing hardware and generally is not.
+
+The diagnostic that settles it costs one cold boot per board: capture both
+consoles from power-on and compare the per-stage bootloader version banners
+and the mode-pin register word. Look in particular for a **boot stage that is
+missing entirely** on one board — an older chain can omit a stage rather than
+merely version-skew it, and a stage that prints nothing at all is easy to
+read past. Do not start from the mode switch: it has been verified identical
+on both boards, and the boards as shipped do not match the setup manual's
+documented "initial settings" row anyway, so that row is not ground truth for
+this bench. Record the flash when you do it — board 1's chain was flashed
+during its original setup and never written down, which is exactly why the
+second board's bring-up lost a session to a false hardware diagnosis. The
+stage tables, offsets and switch positions are vendor material and live
+outside this repository.
+
+**Console mechanics that produce false diagnoses.** Three, all of which have
+already cost time:
+
+- **The APU console baud is not pinned.** There is no `console=` in the
+  self-boot bootargs, and a getty started without `--keep-baud` resets the
+  rate, so the same board has been observed at 1843200 on one boot and 115200
+  on the next. Probe rather than assume. Note that `stty` cannot render
+  custom rates and prints `speed 0` for them — that is a `stty` limitation,
+  not a fault.
+- **`tio --log-file` flushes on newlines only.** U-Boot's returning `=> `
+  prompt, a `Password:` prompt, and single echoed keystrokes carry no
+  newline and can sit in the buffer indefinitely, which looks exactly like a
+  dead console. Judge console state from `tmux capture-pane`, never from the
+  log's size.
+- **Console logs are binary.** `grep` skips binary files and prints nothing
+  at all rather than `0`, so a check built on it silently reports success.
+  Use `grep -a`.
+
+**Power sequencing (from the setup manual, mandatory).** `SW7` must be OFF
+before the AC adapter is connected to or disconnected from the power source.
+Never run the board with the fan or heat sink removed — the SoC overheats to
+destruction. And before diagnosing a board that is silent on both console and
+network, check `SW7`: an unpowered board looks identical to a dead one.
 
 ## Related
 
