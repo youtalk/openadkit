@@ -3,9 +3,19 @@ on:
   push:
     branches: [feat/autosd-x5h-rootfs, feat/autosd-x5h-kernel]
   pull_request:
+    # Exclusions come last: in a `paths` list a later `!` pattern overrides an
+    # earlier match, so these subtract from the `platforms/autosd/x5h/**` line
+    # above. Neither job reads documentation or the U-Boot environment
+    # templates -- the scripts only mention `uboot/` in comments -- so a change
+    # confined to them can produce no CI signal, while still costing a pinned-
+    # toolchain kernel compile plus multi-hour arm64 CI. A docs-only PR started
+    # exactly that run on 2026-08-25 and it had to be cancelled by hand.
+    # `paths-ignore` cannot express this: GitHub rejects it alongside `paths`.
     paths:
       - platforms/autosd/x5h/**
       - .github/workflows/autosd-x5h-rootfs.yaml
+      - '!platforms/autosd/x5h/**.md'
+      - '!platforms/autosd/x5h/uboot/**'
 permissions:
   contents: read
 # Push (branch) and pull_request (paths filter) both fire for the same commit
