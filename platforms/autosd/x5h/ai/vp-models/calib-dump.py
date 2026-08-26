@@ -41,6 +41,19 @@ The calibration layout is not a convention we chose: renesas_ep_utils.
 generate_calibration() globs <calibration-path>/<input_name>/*.npy, sorts it,
 and indexes every input by position -- so per-input file counts must match and
 the names must sort into frame order.
+
+DO NOT MERGE TWO OF THESE TREES BY COPYING DIRECTORIES TOGETHER. Each run
+starts at the first frame that model can actually be fed -- t=1 for a model
+that takes a history frame, t=0 for one that does not (see `start` below) --
+so sample i means a different source frame in the two trees. Concatenating
+them for a merged multi-branch model therefore feeds one branch frame i and
+another frame i+1, silently: every file is present, the counts match, the
+generator is happy, and nothing anywhere reports a skew. Measured in 2026-08,
+where it put a one-frame lag into a merged model's inputs and into every
+overlay rendered from them.
+
+To build calibration for a merged model, dump it in one pass against the
+merged model itself, so a single `start` governs all of its inputs.
 """
 import argparse
 import pathlib
@@ -161,6 +174,10 @@ def main():
     # frame (inference.cpp:141-148), so the two-input model's first real sample
     # is t=1 with prev=t0. Starting at t=0 with prev==curr would feed the
     # calibration a zero-motion frame pair the vehicle never produces.
+    #
+    # This is per-model correct and cross-model INCOMPARABLE: sample i is
+    # source frame i+start, and start differs between models here. See the
+    # merge warning in the module docstring before combining two output trees.
     start = 1 if cfg["history"] else 0
     calib_root = pathlib.Path(a.calib_out) / name
     feeds_root = pathlib.Path(a.feeds_out) / name
