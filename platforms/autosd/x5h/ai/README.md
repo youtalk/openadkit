@@ -7,11 +7,12 @@ the recovery paths are in [../npu-bringup.md](../npu-bringup.md); read that
 first if you are about to touch the board.
 
 **Read the status section of that document before quoting any of this as
-working.** As of 2026-08-21 the NPU does execute — the shipped ResNet18 sample
-runs on it — but model load faults the kernel for larger models, and every
-measurement so far was taken without the bootloader the vendor documents for
-this package. So this directory is complete as tooling and incomplete as
-results.
+working.** As of 2026-08-26 the full three-branch VisionPilot pipeline runs on
+the NPU as a single fused subgraph, with no compute nodes left on the CPU. The
+model-load kernel fault reported here on 2026-08-21 is resolved and was not a
+model-size limit: the kernel had been loaded at an address the NPU runtime
+later writes over, which nothing in the runtime validates or reports. Load the
+kernel where the vendor documents and it does not occur.
 
 ## What is not here, and why
 
@@ -82,6 +83,35 @@ second model does not evict the first.
 `tolerance.json` is **not** committed yet, and cannot be until model load stops
 faulting the kernel: freezing an envelope from a run that never happened would
 be worse than having no envelope.
+
+## Two findings that decide how a model is compiled and where it is decoded
+
+Neither is discoverable from the compiler output, and both cost real time, so
+they are written down here rather than left in a working area.
+
+**Sweep `--slice`; do not assume more is better.** The flag sets how many NPX
+slices execute the network, and the useful value is a property of the model,
+not of the board. Measured on the merged three-branch model at 1024x512: the
+best end-to-end time came from **3 of the 12 available slices**, and using all
+twelve was *worse than using one*. Two effects compose to produce that. The
+NPU-side compute stops improving once the network runs out of work to divide —
+past four slices it was flat to within 0.01 ms, which is what a 16x32
+bottleneck feature map should be expected to do — while dispatch and
+synchronisation cost about a millisecond per slice and simply keep
+accumulating. The sum therefore has a minimum in the middle. Sweep the values
+for the model in hand; the optimum moves with input resolution and batch size,
+so it has to be re-checked after any re-export rather than carried over.
+
+**Decode softmax-family heads on the host, not on the NPU.** A softmax output
+is quantized on a fixed [0,1] grid, so the per-position rounding of a
+soft-argmax head — softmax over positions, then a position-weighted
+expectation, the usual shape for lane offsets and for DFL box decoding — lands
+differently from frame to frame and shows up as a visibly jittering output on
+otherwise smooth input. No weight rescaling can fix it, because nothing changes
+a softmax's output range. Cutting the graph at the pre-softmax logits and doing
+softmax plus expectation on the host in float restored the jitter to the float
+reference exactly, for no measurable latency cost — the tensor crossing the
+boundary is small, and the arithmetic leaves the NPU with it.
 
 ## Mounting artifacts, which is the trap that looks like a driver bug
 
