@@ -88,6 +88,31 @@ podman image exists "$IMAGE" || fail "image_missing image=$IMAGE"
 [ -f "$SCRIPT" ] || fail "eval_script_missing path=$SCRIPT"
 [ -d "$ARTIFACTS" ] || fail "artifacts_missing path=$ARTIFACTS"
 
+# --- layer 5.5: were these artifacts actually calibrated? ----------------
+# The compiling pass re-derives every internal tensor's quantization from the
+# calibration dump each time it runs. Given no dump it does not refuse: it
+# fabricates a histogram, quantizes everything at 1/255, and produces
+# artifacts that load, run, and report entirely normal latencies. Only the
+# numbers are wrong, and the sole trace is a dummy_histogram.pb left in the
+# subgraph directory.
+#
+# That is not hypothetical -- it cost this project two days in 2026-08, and
+# the wrong outputs were nearly reported to the vendor as a hardware defect.
+# So name the condition here rather than letting a latency number imply the
+# accuracy is meaningful.
+#
+# This warns and continues instead of failing: measuring latency on
+# deliberately uncalibrated artifacts is legitimate (latency is independent of
+# the scales, measured), and this probe's job is reachability. It is the
+# accuracy claim that the marker below must not be allowed to support.
+quant=real
+if ls "$ARTIFACTS"/nnx/*/dummy_histogram.pb >/dev/null 2>&1; then
+  quant=dummy
+  echo "NPU_PROBE_WARN dummy_calibration path=$ARTIFACTS" \
+       "(compiled without a calibration dump: internal scales are all 1/255," \
+       "so latency is valid and every accuracy figure from these is not)"
+fi
+
 # --- layer 6: the execution provider actually ran ------------------------
 # A run that merely completes proves nothing, in two separate ways. The sample
 # script lists CPUExecutionProvider as a fallback, so a board with no NPU still
@@ -142,4 +167,4 @@ echo "$out" | grep -q 'avg Latency' || fail no_latency_result
 dmesg 2>/dev/null | grep -q 'Internal error' \
   && fail "kernel_oopsed_during_run ($(dmesg | grep -m1 'Internal error'))"
 
-echo "NPU_PROBE_PASS uio=$uio_count npuc=$npuc_sysfs cmem_other=$(ls -d /dev/cmem_other* | wc -l) artifacts=$art_target"
+echo "NPU_PROBE_PASS uio=$uio_count npuc=$npuc_sysfs cmem_other=$(ls -d /dev/cmem_other* | wc -l) quant=$quant artifacts=$art_target"
