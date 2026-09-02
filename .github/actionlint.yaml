@@ -1,0 +1,22 @@
+# actionlint cannot know the runner labels a self-hosted or third-party runner
+# provider offers, so it checks `runs-on:` against its built-in GitHub-hosted
+# list and rejects anything else. The fork routes heavy jobs to Ubicloud
+# runners, which are named `ubicloud-standard-<vcpu>` with an `-arm` suffix for
+# arm64 (2/4/8/16/30 vCPU on both arches). build-all-images.yaml escapes the
+# check by accident, because its labels sit inside a `${{ }}` expression that
+# actionlint cannot evaluate statically; autosd-x5h-rootfs.yaml names them
+# literally and is therefore flagged. Declaring them here is the remedy
+# actionlint's own diagnostic recommends, and it keeps the literal form, which
+# is the readable one.
+self-hosted-runner:
+  labels:
+    - ubicloud-standard-2
+    - ubicloud-standard-4
+    - ubicloud-standard-8
+    - ubicloud-standard-16
+    - ubicloud-standard-30
+    - ubicloud-standard-2-arm
+    - ubicloud-standard-4-arm
+    - ubicloud-standard-8-arm
+    - ubicloud-standard-16-arm
+    - ubicloud-standard-30-arm
