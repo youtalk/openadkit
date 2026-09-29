@@ -1071,7 +1071,7 @@ not run, it regenerates the units itself. `x5h-mrm-demo.sh` uses the same recove
 - `VP_NPU_PASS frames=<n> wall_avg_ms=<ms> wall_max_ms=<ms>`: `vp-npu-gate.sh`, gate D5.
 - `SI_STOP_PASS`: `si_stop_gate.py` on the companion host (the `si-gate` compose service, gate D6). The CR52-authored stop was seen on domain 1 within the latency budget.
 - `X5H_CES_DEMO_READY sha=<sha> spawn=<idx> units=5 hb=<seq>`: `scripts/x5h-ces2027-demo.sh check`, on the companion host. Reads the package sha, the CARLA spawn index, and the heartbeat sequence together (or `X5H_CES_DEMO_FAIL reason=<slug>`).
-- `DEMO_ROLE_PASS role=demo carveout=0x5da00000 vdev=0x5dc00000 remoteproc=<state>`: `demo-role-smoke.sh`, gate D1a. The board booted the `demo` role with the NPU tree intact, the CR52 carveout relocated, and all four carveouts `cr52_1` lists present under the names remoteproc looks them up by.
+- `DEMO_ROLE_PASS role=demo carveout=0x5da00000 vdev=0x5dc00000 remoteproc=<state> dp=<status>`: `demo-role-smoke.sh`, gate D1a. The board booted the `demo` role with the NPU tree intact, the CR52 carveout relocated, and all four carveouts `cr52_1` lists present under the names remoteproc looks them up by. The kernel owns the display: the DP0 controller node is in the tree, no vendor UIO display node is, and a DP connector exists. `dp=` reports that connector's status and does not decide the result, so a board with no monitor passes with `dp=disconnected`.
 
 ### The four CR52 carveouts
 
@@ -1087,6 +1087,34 @@ The vendor NPU device tree drops every `cr52_*` reserved-memory node but leaves 
 The three `vdev0*` names are load bearing. `rcar_gen5_rproc_prepare` registers every `memory-region` phandle as a carveout named after the node. `rproc_alloc_vring` and `rproc_add_virtio_dev` then look carveouts up by exactly those names. If a name is missing, remoteproc allocates that window from `linux,cma@40000000` instead. No CR52 MPU region maps that address, because the BSP memory map expects Linux CMA at `0xa2600000`. The firmware takes a data abort in `rpmsg_init_vdev` the first time it touches the window. That was gate D1b on board 2 on 2026-09-17.
 
 All four windows must sit inside one CR52 MPU region. The safety island maps `0x5da00000` for 4 MiB in `actuation_module/freertos_x5h/vendor_patched/system_rcar_gen5.c`. If you move a window in `make-demo-dtb.sh`, move that region with it.
+
+### DisplayPort output
+
+The kernel owns the display in the `demo` tree. `make-demo-dtb.sh` removes the vendor's three `generic-uio` display nodes and adds the public DP controllers and connectors from `uboot/demo-display.dtsi`. `rcar-vcon`, `dw-dp` and `tdp2004` then bind, `card0-DP-1` appears, and the frame buffer console shows on the monitor. When the LG wakes from power save, it drops HPD and raises it again (a long HPD, the same signal as a re-plug). The kernel console answers with a new modeset, which trains the link again, so the console comes back by itself.
+
+Two consequences follow:
+
+- The Renesas single-app demo does not run under `demo` or `dev`, and `/dev/dp0` to `/dev/dp2` do not exist. That demo drives the display from user space and needs the vendor NPU tree, booted by hand.
+- The NPU bring-up marker reads `NPU_READY uio=4 cmem=4`. The three display UIO devices are gone, and the NPU devices keep `uio2` and `uio3`.
+
+Never switch the display mode while the system runs. On this BSP kernel, releasing a mode that a client set panics the board through a NULL callback in `vsp1` (`lr` in `vsp1_du_pipeline_frame_end`). `KmsDisplay` never sets `force-modesetting` for this reason. It draws on a plane at the monitor's preferred mode.
+
+The HUD does not survive a monitor power-save cycle or a cable re-plug. `KmsDisplay` holds DRM master while VisionPilot runs, so the kernel console defers the hotplug, and nothing trains the link again. The monitor then shows No Signal until the board reboots. A restart of `x5h-vp` does not help, because the console then restores the same mode, and that is not a modeset. This also applies to a monitor that is asleep when VisionPilot starts: it still reads `connected`, so the sink takes the display, and the wake loses it. On board 2 on 2026-09-29, the console came back from two wakes, and the HUD from none. For a session, turn off the monitor's automatic power save, and do not unplug the cable.
+
+To show VisionPilot's HUD for a bench session:
+
+1. Build the image with the sink on board 2. The build context carries the vendor ORT library, so it never leaves the board:
+
+   ```
+   podman build --platform linux/arm64 -f visionpilot-x5h.containerfile \
+     --build-arg VP_REF=feat/x5h-carla-npu-display -t localhost/x5h-visionpilot:display /var/tmp/vp-ctx
+   ```
+
+2. Stage `components/demo/vision_pilot.display.conf` over `/etc/containers/systemd/vision_pilot.conf`, and point `Image=` in `/etc/containers/systemd/x5h-vp.container` at `:display`. Keep backups of both files.
+3. Run `systemctl daemon-reload` and `systemctl restart x5h-vp`. The journal shows `[KmsDisplay] <w>x<h> shown at ...` when the HUD is on the monitor.
+4. Put both files back and restart `x5h-vp` when the session ends.
+
+If the monitor is unplugged when VisionPilot starts, VisionPilot runs as usual, and the sink tries again every 5 s. The HUD appears a few seconds after the monitor is plugged in and the console shows on it.
 
 ### Running the demo
 
