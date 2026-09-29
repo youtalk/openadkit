@@ -39,6 +39,10 @@
 # maps a carveout with ioremap_wc, and arm64 refuses to ioremap memory that is
 # in the linear map.
 #
+# It then hands the display to the kernel: it removes the vendor's three
+# generic-uio display nodes and adds the public DP controllers and connectors
+# from demo-display.dtsi. See the comment at that step.
+#
 # Input and output are vendor blobs: run this at staging time, never commit
 # either file.
 #   make-demo-dtb.sh r8a78000-ironhide-npu-cacr.dtb r8a78000-ironhide-demo.dtb
@@ -113,9 +117,39 @@ awk -v nodes="$nodes" '
     { print }
     END { if (!found) exit 3 }
 ' "$tmp/in.dts" > "$tmp/out.dts" || die "no reserved-memory node in $in"
+# The display. The vendor tree drops the three dp@ controllers and dp-con
+# connectors and exposes the display as three generic-uio nodes for its
+# user-space demo, so rcar-vcon finds no encoder and no DRM device appears.
+# demo-display.dtsi is the public linux-bsp set. dtc merges it as a second
+# root block and deletes the UIO nodes as it goes, so nothing here edits the
+# vendor tree as text. Every phandle the fragment borrows is checked by path
+# first (its "expect" lines), and every phandle it defines must still be free:
+# a reshuffled vendor tree aborts here instead of wiring the display to the
+# wrong node. Captured, then matched: `fdtget | grep -q` under pipefail turns
+# grep's early exit into a SIGPIPE failure on a healthy tree.
+DISPLAY_DTSI=${DISPLAY_DTSI:-$(dirname "$0")/demo-display.dtsi}
+[ -r "$DISPLAY_DTSI" ] || die "display fragment not readable: $DISPLAY_DTSI"
+soc_nodes=$(fdtget -l "$in" /soc) || die "$in has no /soc"
+root_nodes=$(fdtget -l "$in" /)
+for n in display@0 display@1 display@2; do
+    grep -qx "$n" <<<"$soc_nodes" || die "$in has no /soc/$n; refusing to guess where the display is"
+done
+if grep -qx 'dp@c5[456]00000' <<<"$soc_nodes" || grep -qx 'dp-con[012]' <<<"$root_nodes"; then
+    die "$in already carries DisplayPort nodes (double derivation?)"
+fi
+while read -r _ _ path prop want; do
+    got=$(fdtget -t x "$in" "$path" "$prop" 2>/dev/null) || got=missing
+    [ "$got" = "$want" ] || die "$in $path $prop is $got; the display fragment expects $want"
+done < <(grep '^ \* expect ' "$DISPLAY_DTSI")
+for ph in $(grep -o 'phandle = <0x[0-9a-f]*>' "$DISPLAY_DTSI" | grep -o '0x[0-9a-f]*'); do
+    if grep -q "phandle = <$ph>;" "$tmp/out.dts"; then
+        die "phandle $ph of the display fragment is already assigned; refusing to alias a live node"
+    fi
+done
+cat "$DISPLAY_DTSI" >> "$tmp/out.dts"
 dtc -q -I dts -O dtb -o "$out" "$tmp/out.dts"
 # fdtput rather than a second awk pass: memory-region lives in a node this
 # script does not otherwise rewrite, and dtc has already validated the tree.
 # It fails loudly if $CR52_NODE is absent, which is the check we want.
 fdtput -t x "$out" "$CR52_NODE" memory-region "${phandles[@]}"
-echo "DEMO_DTB_OK out=$out vdev_base=$VDEV_BASE regions=${#phandles[@]} phandles=${phandles[*]}"
+echo "DEMO_DTB_OK out=$out vdev_base=$VDEV_BASE regions=${#phandles[@]} phandles=${phandles[*]} display=3"
