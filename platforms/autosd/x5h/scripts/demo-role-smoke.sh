@@ -8,18 +8,21 @@
 #
 # Markers on stdout:
 #   DEMO_ROLE_PASS role=<demo|dev> carveout=0x96650000 vdev=0x96400000 remoteproc=<state>
+#                  dp=<connected|disconnected|unknown>
 #   DEMO_ROLE_FAIL reason=<wrong_role|carveout_not_reserved|carveout_node_missing|
 #                          carveout_phandle|<name>_not_reserved|<name>_node_missing|
 #                          <name>_phandle|<name>_not_linked|
 #                          cr52_memory_region|cr52_node_ambiguous|
 #                          npu_region_<base>_missing|uio2_missing|cmem_probe_missing|
-#                          remoteproc_missing>
+#                          remoteproc_missing|dp_node_missing|display_uio_present|
+#                          dp_connector_missing|npu_uio_moved>
 set -uo pipefail
 CMDLINE_FILE=${CMDLINE_FILE:-/proc/cmdline}
 IOMEM_FILE=${IOMEM_FILE:-/proc/iomem}
 DT_ROOT=${DT_ROOT:-/proc/device-tree}
 UIO_DIR=${UIO_DIR:-/sys/class/uio}
 RPROC_DIR=${RPROC_DIR:-/sys/class/remoteproc/remoteproc0}
+DRM_DIR=${DRM_DIR:-/sys/class/drm}
 # journalctl -k -b, NOT dmesg. The cmem probe lines this gate looks for are
 # printed at boot, and dmesg reads a ring buffer that WRAPS: on board 2 on
 # 2026-09-18, after about 10 hours of uptime and heavy container and DDS
@@ -110,6 +113,11 @@ for r in 5da00000 9e600000 1400000000 1c00000000; do
     [ -d "$DT_ROOT/reserved-memory/linux,npu_region@$r" ] || fail "npu_region_${r}_missing"
 done
 [ -e "$UIO_DIR/uio2" ] || fail uio2_missing
+# x5h-score-vp.sh passes /dev/uio2 and /dev/uio3 to VisionPilot as the two NPU
+# cores, by number. The demo tree removes the vendor's three display UIO
+# devices, so check that the numbers still name the NPU.
+[ "$(cat "$UIO_DIR/uio2/name" 2>/dev/null)" = npuc0 ] && [ "$(cat "$UIO_DIR/uio3/name" 2>/dev/null)" = npuc1 ] \
+    || fail npu_uio_moved
 # Capture, then match on the string. `dmesg | grep -q` lets grep exit at the
 # first match, closing the pipe under this script's `set -o pipefail` --
 # dmesg then takes a SIGPIPE on its next write and reports 141, which
@@ -118,5 +126,12 @@ done
 # board 1, 3/5 on board 2, on an otherwise healthy boot.
 dmesg_out=$($DMESG_CMD)
 grep -q 'assigned reserved memory node linux,npu_region' <<<"$dmesg_out" || fail cmem_probe_missing
+# The kernel owns the display (make-demo-dtb.sh, demo-display.dtsi): the DP0
+# controller node is in the tree, no vendor UIO display node is, and rcar-vcon
+# registered the DP connector. The connector's status is reported, not
+# required: a board that boots with no monitor is still a good boot.
+[ -d "$DT_ROOT/soc/dp@c5400000" ] || fail dp_node_missing
+for n in 0 1 2; do [ -e "$DT_ROOT/soc/display@$n" ] && fail display_uio_present; done
+dp=$(cat "$DRM_DIR"/card*-DP-1/status 2>/dev/null) || fail dp_connector_missing
 state=$(cat "$RPROC_DIR/state" 2>/dev/null) || fail remoteproc_missing
-echo "DEMO_ROLE_PASS role=$role carveout=0x$BASE vdev=0x$VDEV_BASE remoteproc=$state"
+echo "DEMO_ROLE_PASS role=$role carveout=0x$BASE vdev=0x$VDEV_BASE remoteproc=$state dp=$dp"
