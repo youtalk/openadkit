@@ -1071,7 +1071,7 @@ not run, it regenerates the units itself. `x5h-mrm-demo.sh` uses the same recove
 - `VP_NPU_PASS frames=<n> wall_avg_ms=<ms> wall_max_ms=<ms>`: `vp-npu-gate.sh`, gate D5.
 - `SI_STOP_PASS`: `si_stop_gate.py` on the companion host (the `si-gate` compose service, gate D6). The CR52-authored stop was seen on domain 1 within the latency budget.
 - `X5H_CES_DEMO_READY sha=<sha> spawn=<idx> units=5 hb=<seq>`: `scripts/x5h-ces2027-demo.sh check`, on the companion host. Reads the package sha, the CARLA spawn index, and the heartbeat sequence together (or `X5H_CES_DEMO_FAIL reason=<slug>`).
-- `DEMO_ROLE_PASS role=demo carveout=0x5da00000 vdev=0x5dc00000 remoteproc=<state>`: `demo-role-smoke.sh`, gate D1a. The board booted the `demo` role with the NPU tree intact, the CR52 carveout relocated, and all four carveouts `cr52_1` lists present under the names remoteproc looks them up by.
+- `DEMO_ROLE_PASS role=demo carveout=0x5da00000 vdev=0x5dc00000 remoteproc=<state> dp=<status>`: `demo-role-smoke.sh`, gate D1a. The board booted the `demo` role with the NPU tree intact, the CR52 carveout relocated, and all four carveouts `cr52_1` lists present under the names remoteproc looks them up by. The kernel owns the display: the DP0 controller node is in the tree, no vendor UIO display node is, and a DP connector exists. `dp=` reports that connector's status and does not decide the result, so a board with no monitor passes with `dp=disconnected`.
 
 ### The four CR52 carveouts
 

@@ -50,15 +50,19 @@ good() {
 5dd10000-8affffff : System RAM
 IOMEM
     echo offline > "$tmp/g/rproc/state"
+    # The kernel owns the display: the DP controller node is in the tree, the
+    # vendor UIO node is not, and rcar-vcon registered the DP connector.
+    mkdir -p "$tmp/g/dt/soc/dp@c5400000" "$tmp/g/drm/card0-DP-1"
+    echo connected > "$tmp/g/drm/card0-DP-1/status"
     write_big_dmesg
 }
-run() { CMDLINE_FILE="$tmp/g/cmdline" IOMEM_FILE="$tmp/g/iomem" DT_ROOT="$tmp/g/dt" UIO_DIR="$tmp/g/uio" RPROC_DIR="$tmp/g/rproc" DMESG_CMD="$tmp/g/dmesg" bash "$s"; }
+run() { CMDLINE_FILE="$tmp/g/cmdline" IOMEM_FILE="$tmp/g/iomem" DT_ROOT="$tmp/g/dt" UIO_DIR="$tmp/g/uio" RPROC_DIR="$tmp/g/rproc" DMESG_CMD="$tmp/g/dmesg" DRM_DIR="$tmp/g/drm" bash "$s"; }
 # Both AD Kit roles pass, and the marker reports which one was found rather
 # than asserting demo, so a dev boot cannot be read back as a demo boot.
 for role in demo dev; do
     good; echo "root=x x5h.role=$role" > "$tmp/g/cmdline"
     out=$(run) || fail "good_tree_rejected_$role"
-    grep -q "^DEMO_ROLE_PASS role=$role carveout=0x5da00000 vdev=0x5dc00000 remoteproc=offline$" <<<"$out" || fail "no_pass_marker_$role"
+    grep -q "^DEMO_ROLE_PASS role=$role carveout=0x5da00000 vdev=0x5dc00000 remoteproc=offline dp=connected$" <<<"$out" || fail "no_pass_marker_$role"
 done
 # Each vdev carveout, missing three ways. These are the checks gate D1a did not
 # have on 2026-09-17, when it passed a tree whose vrings remoteproc then
@@ -118,4 +122,15 @@ good; printf '#!/bin/sh\necho "[1.0] nothing relevant"\n' > "$tmp/g/dmesg"; chmo
 grep -q 'reason=cmem_probe_missing' <<<"$out" || fail cmem_probe_reason
 good; rm "$tmp/g/rproc/state"; out=$(run) && fail missing_remoteproc_accepted
 grep -q 'reason=remoteproc_missing' <<<"$out" || fail remoteproc_reason
+# A board that boots with no monitor still passes gate D1a. The marker says so.
+good; echo disconnected > "$tmp/g/drm/card0-DP-1/status"; out=$(run) || fail no_monitor_rejected
+grep -q ' dp=disconnected$' <<<"$out" || fail no_monitor_marker
+# The vendor tree was staged by mistake: no DP node, the UIO node back.
+good; rmdir "$tmp/g/dt/soc/dp@c5400000"; out=$(run) && fail missing_dp_node_accepted
+grep -q 'reason=dp_node_missing' <<<"$out" || fail dp_node_reason
+good; mkdir -p "$tmp/g/dt/soc/display@1"; out=$(run) && fail uio_display_accepted
+grep -q 'reason=display_uio_present' <<<"$out" || fail uio_display_reason
+# The node is there, but no DRM connector came up: the driver did not bind.
+good; rm -r "$tmp/g/drm/card0-DP-1"; out=$(run) && fail missing_connector_accepted
+grep -q 'reason=dp_connector_missing' <<<"$out" || fail connector_reason
 echo "TEST_PASS $name"
