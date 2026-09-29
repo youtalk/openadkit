@@ -18,4 +18,10 @@ grep -q -E '^visualization_on[[:space:]]*=[[:space:]]*true$' <<<"$cfg" || fail v
 grep -q -E '^kms_display[[:space:]]*=[[:space:]]*rcar-vcon$' <<<"$cfg" || fail kms_off
 base=$(grep -v -E '^[[:space:]]*#' "$d/vision_pilot.conf")
 grep -q -E '^kms_display[[:space:]]*=[[:space:]]*$' <<<"$base" || fail base_kms_not_empty
+# The DRM device must stay optional in the Quadlet. podman refuses a missing
+# --device even under --privileged (board 2, podman 6.1.0, rc 125), so a
+# board whose display did not bind would lose VisionPilot, not only the HUD.
+quadlet=$(grep -v -E '^[[:space:]]*#' "$d/x5h-vp.container")
+grep -q -x 'AddDevice=-/dev/dri/card0' <<<"$quadlet" || fail drm_device_not_optional
+grep -q '^AddDevice=/dev/dri' <<<"$quadlet" && fail drm_device_required
 echo "TEST_PASS $name"
