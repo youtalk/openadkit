@@ -1090,7 +1090,7 @@ All four windows must sit inside one CR52 MPU region. The safety island maps `0x
 
 ### DisplayPort output
 
-The kernel owns the display in the `demo` tree. `make-demo-dtb.sh` removes the vendor's three `generic-uio` display nodes and adds the public DP controllers and connectors from `uboot/demo-display.dtsi`. `rcar-vcon`, `dw-dp` and `tdp2004` then bind, `card0-DP-1` appears, and the frame buffer console shows on the monitor. The `dw-dp` core trains the link again on each IRQ_HPD, so a monitor that wakes from power save comes back by itself.
+The kernel owns the display in the `demo` tree. `make-demo-dtb.sh` removes the vendor's three `generic-uio` display nodes and adds the public DP controllers and connectors from `uboot/demo-display.dtsi`. `rcar-vcon`, `dw-dp` and `tdp2004` then bind, `card0-DP-1` appears, and the frame buffer console shows on the monitor. When the LG wakes from power save, it drops HPD and raises it again (a long HPD, the same signal as a re-plug). The kernel console answers with a new modeset, which trains the link again, so the console comes back by itself.
 
 Two consequences follow:
 
@@ -1098,6 +1098,8 @@ Two consequences follow:
 - The NPU bring-up marker reads `NPU_READY uio=4 cmem=4`. The three display UIO devices are gone, and the NPU devices keep `uio2` and `uio3`.
 
 Never switch the display mode while the system runs. On this BSP kernel, releasing a mode that a client set panics the board through a NULL callback in `vsp1` (`lr` in `vsp1_du_pipeline_frame_end`). `KmsDisplay` never sets `force-modesetting` for this reason. It draws on a plane at the monitor's preferred mode.
+
+The HUD does not survive a monitor power-save cycle or a cable re-plug. `KmsDisplay` holds DRM master while VisionPilot runs, so the kernel console defers the hotplug, and nothing trains the link again. The monitor then shows No Signal until the board reboots. A restart of `x5h-vp` does not help, because the console then restores the same mode, and that is not a modeset. This also applies to a monitor that is asleep when VisionPilot starts: it still reads `connected`, so the sink takes the display, and the wake loses it. On board 2 on 2026-09-29, the console came back from two wakes, and the HUD from none. For a session, turn off the monitor's automatic power save, and do not unplug the cable.
 
 To show VisionPilot's HUD for a bench session:
 
@@ -1112,7 +1114,7 @@ To show VisionPilot's HUD for a bench session:
 3. Run `systemctl daemon-reload` and `systemctl restart x5h-vp`. The journal shows `[KmsDisplay] <w>x<h> shown at ...` when the HUD is on the monitor.
 4. Put both files back and restart `x5h-vp` when the session ends.
 
-If no monitor is connected, VisionPilot runs as usual, and the sink tries again every 5 s. The HUD appears a few seconds after the monitor wakes.
+If the monitor is unplugged when VisionPilot starts, VisionPilot runs as usual, and the sink tries again every 5 s. The HUD appears a few seconds after the monitor is plugged in and the console shows on it.
 
 ### Running the demo
 
