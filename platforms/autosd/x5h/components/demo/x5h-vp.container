@@ -18,6 +18,10 @@ AddDevice=/dev/cmem_other0
 AddDevice=/dev/cmem_other1
 AddDevice=/dev/cmem_other2
 AddDevice=/dev/cmem_other3
+# KmsDisplay (kms_display in vision_pilot.conf) draws the HUD through the
+# kernel DRM driver. --privileged already passes every device; this line
+# records the dependency the same way the npuc and cmem lines do.
+AddDevice=/dev/dri/card0
 Volume=/opt/npu:/npu
 # The ARC programs the NPU driver loads to power the engine on. /opt/npu ships
 # one set at hostapp/binary/arc_prog_npus, and it is NOT the set this image's

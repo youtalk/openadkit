@@ -1088,6 +1088,32 @@ The three `vdev0*` names are load bearing. `rcar_gen5_rproc_prepare` registers e
 
 All four windows must sit inside one CR52 MPU region. The safety island maps `0x5da00000` for 4 MiB in `actuation_module/freertos_x5h/vendor_patched/system_rcar_gen5.c`. If you move a window in `make-demo-dtb.sh`, move that region with it.
 
+### DisplayPort output
+
+The kernel owns the display in the `demo` tree. `make-demo-dtb.sh` removes the vendor's three `generic-uio` display nodes and adds the public DP controllers and connectors from `uboot/demo-display.dtsi`. `rcar-vcon`, `dw-dp` and `tdp2004` then bind, `card0-DP-1` appears, and the frame buffer console shows on the monitor. The `dw-dp` core trains the link again on each IRQ_HPD, so a monitor that wakes from power save or is re-plugged comes back by itself.
+
+Two consequences follow:
+
+- The Renesas single-app demo does not run under `demo` or `dev`, and `/dev/dp0` to `/dev/dp2` do not exist. That demo drives the display from user space and needs the vendor NPU tree, booted by hand.
+- The NPU bring-up marker reads `NPU_READY uio=4 cmem=4`. The three display UIO devices are gone, and the NPU devices keep `uio2` and `uio3`.
+
+Never switch the display mode while the system runs. On this BSP kernel, releasing a mode that a client set panics the board through a NULL callback in `vsp1` (`lr` in `vsp1_du_pipeline_frame_end`). `KmsDisplay` never sets `force-modesetting` for this reason. It draws on a plane at the monitor's preferred mode.
+
+To show VisionPilot's HUD for a bench session:
+
+1. Build the image with the sink on board 2. The build context carries the vendor ORT library, so it never leaves the board:
+
+   ```
+   podman build --platform linux/arm64 -f visionpilot-x5h.containerfile \
+     --build-arg VP_REF=feat/x5h-carla-npu-display -t localhost/x5h-visionpilot:display /var/tmp/vp-ctx
+   ```
+
+2. Stage `components/demo/vision_pilot.display.conf` over `/etc/containers/systemd/vision_pilot.conf`, and point `Image=` in `/etc/containers/systemd/x5h-vp.container` at `:display`. Keep backups of both files.
+3. Run `systemctl daemon-reload` and `systemctl restart x5h-vp`. The journal shows `[KmsDisplay] <w>x<h> shown at ...` when the HUD is on the monitor.
+4. Put both files back and restart `x5h-vp` when the session ends.
+
+If no monitor is connected, VisionPilot runs as usual, and the sink tries again every 5 s. The HUD appears a few seconds after the monitor wakes.
+
 ### Running the demo
 
 The companion-host half is a Docker Compose stack, `components/demo/docker-compose.yaml`.
