@@ -1090,7 +1090,7 @@ All four windows must sit inside one CR52 MPU region. The safety island maps `0x
 
 ### DisplayPort output
 
-The kernel owns the display in the `demo` tree. `make-demo-dtb.sh` removes the vendor's three `generic-uio` display nodes and adds the public DP controllers and connectors from `uboot/demo-display.dtsi`. `rcar-vcon`, `dw-dp` and `tdp2004` then bind, `card0-DP-1` appears, and the frame buffer console shows on the monitor. The `dw-dp` core trains the link again on each IRQ_HPD, so a monitor that wakes from power save or is re-plugged comes back by itself.
+The kernel owns the display in the `demo` tree. `make-demo-dtb.sh` removes the vendor's three `generic-uio` display nodes and adds the public DP controllers and connectors from `uboot/demo-display.dtsi`. `rcar-vcon`, `dw-dp` and `tdp2004` then bind, `card0-DP-1` appears, and the frame buffer console shows on the monitor. The `dw-dp` core trains the link again on each IRQ_HPD, so a monitor that wakes from power save comes back by itself.
 
 Two consequences follow:
 
