@@ -34,18 +34,31 @@ jobs:
     # run on the arm64 runner. Running it first also makes a kernel build
     # error fail the workflow before the multi-hour arm64 job spends
     # anything.
-    runs-on: ubicloud-standard-16
-    # Unmeasured on purpose-built hardware as of this branch: no run of this
-    # job has completed yet, so the number is a budget, not an observation.
+    # GitHub-hosted runner: 4 vCPU and about 14 GB free disk before the
+    # cleanup step below.
+    runs-on: ubuntu-24.04
+    # A budget, not a measurement: no run on this runner has finished yet.
     # It has to cover a cold 134 MB toolchain fetch, a ~200 MB source fetch,
     # and a full `Image dtbs modules` build of a Yocto-derived BSP config
-    # carrying debug info -- so 90 rather than a tighter guess, and the
-    # df -h probes around the build below are what make a timeout or an
-    # ENOSPC diagnosable instead of just red. Tighten it once a green run
-    # has given a real figure.
-    timeout-minutes: 90
+    # carrying debug info on 4 vCPU. The df -h probes around the build make
+    # a timeout or an ENOSPC diagnosable. Tighten it after a green run.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+
+      - name: Free disk space (GitHub-hosted runner)
+        # The workflow uses apt, curl, docker, podman, python3 and Bazel
+        # (which downloads its own JDK). It uses none of these preinstalled
+        # toolsets, so removing them is safe.
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/swift
+          df -h /
 
       - name: Report disk headroom (before the kernel build)
         run: df -h /
@@ -92,10 +105,26 @@ jobs:
   build-score:
     # x86_64 on purpose: the S-CORE GCC 12 and Ferrocene toolchains declare
     # an x86_64 Linux execution host only.
-    runs-on: ubicloud-standard-16
-    timeout-minutes: 60
+    # GitHub-hosted runner: 4 vCPU and limited disk. The timeout is a budget
+    # to tighten after a green run.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+
+      - name: Free disk space (GitHub-hosted runner)
+        # The workflow uses apt, curl, docker, podman, python3 and Bazel
+        # (which downloads its own JDK). It uses none of these preinstalled
+        # toolsets, so removing them is safe.
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/swift
+          df -h /
 
       - name: Report disk headroom (before the S-CORE build)
         run: df -h /
@@ -153,23 +182,33 @@ jobs:
     # wall-clock is roughly neutral -- and a kernel build error now
     # fails before the multi-hour aib build starts.
     needs: [build-kernel, build-score]
-    # 30 vCPU (user-approved): kept after the kernel compile moved out to
-    # the x64 build-kernel job -- the aib build, the native container
-    # builds and the TCG QEMU gate still run here. If this label ever
-    # fails to resolve (cycle-1 check), fall back to ubicloud-standard-16-arm.
-    runs-on: ubicloud-standard-30-arm
+    # GitHub-hosted arm64 runner: 4 vCPU and limited disk. The aib build, the
+    # native container builds and the TCG QEMU gate run here.
+    runs-on: ubuntu-24.04-arm
     # Generous but bounded: the job is expected to run for hours (aib build,
     # docker build/skopeo for the test images -- native on this arm64
     # runner, not emulated, so cheaper than the platform-generic worst
     # case -- and a TCG QEMU boot, whose gate alone budgets up to 1800s
-    # to a login prompt plus a 900s inactivity window per marker). 240
-    # stays well below the 360-minute platform default while giving that
-    # worst case real headroom, so a genuinely stuck step (a hung prompt,
-    # a runaway retry loop) fails within a single working session instead
-    # of the ceiling itself wasting the whole cycle with no diagnostic.
-    timeout-minutes: 240
+    # to a login prompt plus a 900s inactivity window per marker). With 4
+    # vCPU this is a budget, not a measurement. 360 minutes is the limit of
+    # a GitHub-hosted job. Tighten it after a green run.
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+
+      - name: Free disk space (GitHub-hosted runner)
+        # The workflow uses apt, curl, docker, podman, python3 and Bazel
+        # (which downloads its own JDK). It uses none of these preinstalled
+        # toolsets, so removing them is safe.
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/swift
+          df -h /
 
       - name: Report disk headroom (before host tool install)
         run: df -h /
@@ -177,8 +216,8 @@ jobs:
       - name: Install host tools
         # podman and crun are installed together, as a PAIR, only when
         # podman is itself absent, because two container stacks coexist on
-        # this runner and apt supplies the wrong one. Measured on the
-        # Ubicloud arm64 runner image (2.336.0, 2026-08-06): the image ships
+        # this runner and apt supplies the wrong one. Measured on an
+        # earlier third-party arm64 runner image (2.336.0, 2026-08-06): the image ships
         # a matched, modern pair in /usr/local/bin, outside dpkg -- podman
         # 5.8.4 with crun 1.28, its systemd units in
         # /usr/local/lib/systemd/system -- while `apt-get install podman
@@ -293,7 +332,7 @@ jobs:
         run: |
           # The runner image can already have podman's overlay store mounted
           # under /var/lib/containers by the time this step runs (observed on
-          # Ubicloud arm64 runner 2.336.0, 2026-08-06: apt now pulls in podman
+          # a third-party arm64 runner image 2.336.0, 2026-08-06: apt now pulls in podman
           # with its systemd units, and a mounted store makes the rm -rf below
           # fail EBUSY). Show what is actually mounted first, stop podman so
           # nothing keeps the store open, then unmount everything at or under
