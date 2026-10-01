@@ -108,8 +108,8 @@ jobs:
           chmod +x "$RUNNER_TEMP/bazelisk"
           printf 'common --repository_cache=%s/.cache/bazel-repo\nbuild --disk_cache=%s/.cache/bazel-disk\n' "$HOME" "$HOME" > ~/.bazelrc
 
-      - name: Cache the Bazel repository and disk caches
-        uses: actions/cache@v4
+      - name: Restore the Bazel repository and disk caches
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cache/bazel-repo
@@ -118,6 +118,17 @@ jobs:
 
       - name: Build S-CORE for aarch64
         run: BAZEL="$RUNNER_TEMP/bazelisk" platforms/autosd/x5h/score/build-score.sh "$RUNNER_TEMP/score" aarch64
+
+      # Saved even when the build fails, so a first run that times out still
+      # keeps what it fetched.
+      - name: Save the Bazel repository and disk caches
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/bazel-repo
+            ~/.cache/bazel-disk
+          key: x5h-score-${{ hashFiles('platforms/autosd/x5h/score/MODULE.bazel.lock', 'platforms/autosd/x5h/score/.bazelversion') }}
 
       - name: Check the S-CORE artifacts
         run: SCORE_TAR="$RUNNER_TEMP/score/score-x5h-aarch64.tar" bash platforms/autosd/x5h/tests/test-score-artifacts.sh
