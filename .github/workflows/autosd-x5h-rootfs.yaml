@@ -34,31 +34,12 @@ jobs:
     # run on the arm64 runner. Running it first also makes a kernel build
     # error fail the workflow before the multi-hour arm64 job spends
     # anything.
-    # GitHub-hosted runner: 4 vCPU and about 14 GB free disk before the
-    # cleanup step below.
+    # GitHub-hosted runner: 145 GB disk with 112-118 GB free, 4 vCPU.
+    # Run 36917762878 (2026-10-01) measured build-kernel at 26 min.
     runs-on: ubuntu-24.04
-    # A budget, not a measurement: no run on this runner has finished yet.
-    # It has to cover a cold 134 MB toolchain fetch, a ~200 MB source fetch,
-    # and a full `Image dtbs modules` build of a Yocto-derived BSP config
-    # carrying debug info on 4 vCPU. The df -h probes around the build make
-    # a timeout or an ENOSPC diagnosable. Tighten it after a green run.
-    timeout-minutes: 180
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-
-      - name: Free disk space (GitHub-hosted runner)
-        # The workflow uses apt, curl, docker, podman, python3 and Bazel
-        # (which downloads its own JDK). It uses none of these preinstalled
-        # toolsets, so removing them is safe.
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/.ghcup
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/share/swift
-          df -h /
 
       - name: Report disk headroom (before the kernel build)
         run: df -h /
@@ -105,26 +86,12 @@ jobs:
   build-score:
     # x86_64 on purpose: the S-CORE GCC 12 and Ferrocene toolchains declare
     # an x86_64 Linux execution host only.
-    # GitHub-hosted runner: 4 vCPU and limited disk. The timeout is a budget
-    # to tighten after a green run.
+    # GitHub-hosted runner: 145 GB disk with 112-118 GB free, 4 vCPU.
+    # Run 36917762878 (2026-10-01) measured build-score at 7 min.
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-
-      - name: Free disk space (GitHub-hosted runner)
-        # The workflow uses apt, curl, docker, podman, python3 and Bazel
-        # (which downloads its own JDK). It uses none of these preinstalled
-        # toolsets, so removing them is safe.
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/.ghcup
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/share/swift
-          df -h /
 
       - name: Report disk headroom (before the S-CORE build)
         run: df -h /
@@ -182,33 +149,12 @@ jobs:
     # wall-clock is roughly neutral -- and a kernel build error now
     # fails before the multi-hour aib build starts.
     needs: [build-kernel, build-score]
-    # GitHub-hosted arm64 runner: 4 vCPU and limited disk. The aib build, the
-    # native container builds and the TCG QEMU gate run here.
+    # GitHub-hosted arm64 runner: 145 GB disk with 112-118 GB free, 4 vCPU.
+    # Run 36917762878 (2026-10-01) measured build-and-gate at 17 min on ubuntu-24.04-arm with TCG QEMU gate.
     runs-on: ubuntu-24.04-arm
-    # Generous but bounded: the job is expected to run for hours (aib build,
-    # docker build/skopeo for the test images -- native on this arm64
-    # runner, not emulated, so cheaper than the platform-generic worst
-    # case -- and a TCG QEMU boot, whose gate alone budgets up to 1800s
-    # to a login prompt plus a 900s inactivity window per marker). With 4
-    # vCPU this is a budget, not a measurement. 360 minutes is the limit of
-    # a GitHub-hosted job. Tighten it after a green run.
-    timeout-minutes: 360
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-
-      - name: Free disk space (GitHub-hosted runner)
-        # The workflow uses apt, curl, docker, podman, python3 and Bazel
-        # (which downloads its own JDK). It uses none of these preinstalled
-        # toolsets, so removing them is safe.
-        run: |
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/.ghcup
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /usr/share/swift
-          df -h /
 
       - name: Report disk headroom (before host tool install)
         run: df -h /
