@@ -89,6 +89,51 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  build-score:
+    # x86_64 on purpose: the S-CORE GCC 12 and Ferrocene toolchains declare
+    # an x86_64 Linux execution host only.
+    runs-on: ubicloud-standard-16
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Report disk headroom (before the S-CORE build)
+        run: df -h /
+
+      - name: Install the pinned bazelisk
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/bazelisk" \
+            https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-amd64
+          echo "fd8fdff418a1758887520fa42da7e6ae39aefc788cf5e7f7bb8db6934d279fc4  $RUNNER_TEMP/bazelisk" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/bazelisk"
+          printf 'common --repository_cache=%s/.cache/bazel-repo\nbuild --disk_cache=%s/.cache/bazel-disk\n' "$HOME" "$HOME" > ~/.bazelrc
+
+      - name: Cache the Bazel repository and disk caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/bazel-repo
+            ~/.cache/bazel-disk
+          key: x5h-score-${{ hashFiles('platforms/autosd/x5h/score/MODULE.bazel.lock', 'platforms/autosd/x5h/score/.bazelversion') }}
+
+      - name: Build S-CORE for aarch64
+        run: BAZEL="$RUNNER_TEMP/bazelisk" platforms/autosd/x5h/score/build-score.sh "$RUNNER_TEMP/score" aarch64
+
+      - name: Check the S-CORE artifacts
+        run: SCORE_TAR="$RUNNER_TEMP/score/score-x5h-aarch64.tar" bash platforms/autosd/x5h/tests/test-score-artifacts.sh
+
+      - name: Report disk headroom (after the S-CORE build)
+        if: always()
+        run: df -h /
+
+      - name: Upload the S-CORE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: x5h-score
+          path: ${{ runner.temp }}/score/score-x5h-aarch64.tar
+          retention-days: 14
+          if-no-files-found: error
+
   build-and-gate:
     # Serial by necessity: this job consumes the kernel artifact at the
     # inject step, and GitHub Actions cannot wait mid-job for another
@@ -96,7 +141,7 @@ jobs:
     # kernel compile that used to run natively inside this job, so
     # wall-clock is roughly neutral -- and a kernel build error now
     # fails before the multi-hour aib build starts.
-    needs: build-kernel
+    needs: [build-kernel, build-score]
     # 30 vCPU (user-approved): kept after the kernel compile moved out to
     # the x64 build-kernel job -- the aib build, the native container
     # builds and the TCG QEMU gate still run here. If this label ever
@@ -426,6 +471,12 @@ jobs:
           name: x5h-kernel
           path: ${{ runner.temp }}/bspkernel
 
+      - name: Download the S-CORE artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: x5h-score
+          path: ${{ runner.temp }}/score
+
       - name: Build test images
         # The first real execution of `docker build` on a runner with
         # working networking (this sandbox has net.ipv4.ip_forward=0, so it
@@ -442,7 +493,7 @@ jobs:
       - name: Inject test payload + rebuilt-kernel modules into the ext4 export
         run: |
           cd platforms/autosd/x5h
-          scripts/inject-test-images.sh aib/x5h-rootfs.ext4 "$RUNNER_TEMP/testimages" "$RUNNER_TEMP/bspkernel"
+          scripts/inject-test-images.sh aib/x5h-rootfs.ext4 "$RUNNER_TEMP/testimages" "$RUNNER_TEMP/bspkernel" "$RUNNER_TEMP/score/score-x5h-aarch64.tar"
 
       - name: Report disk headroom (before the QEMU gate)
         run: df -h /
@@ -492,6 +543,7 @@ jobs:
           cp -f "$RUNNER_TEMP/bspkernel/config-autosd.txt" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           cp -f "$RUNNER_TEMP/bspkernel/provenance.txt" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           cp -f "$RUNNER_TEMP/bspkernel/extract-ikconfig" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
+          cp -f "$RUNNER_TEMP/score/score-x5h-aarch64.tar" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           cp -rf "$RUNNER_TEMP/testimages" "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           cp -f /tmp/x5h-gate.log "$RUNNER_TEMP/x5h-bundle/" 2>/dev/null || true
           ls -lhR "$RUNNER_TEMP/x5h-bundle" || true
