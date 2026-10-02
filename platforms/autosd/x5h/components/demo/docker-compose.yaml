@@ -78,7 +78,8 @@ services:
   # frames; a larger socket buffer did not help, because the wall is the byte
   # count. This subscribes on loopback, where the raw size costs nothing, and
   # publishes JPEG at about 159 KiB per frame for the board to decode with its
-  # x5h-image-republish unit. Both ends must agree on the compressed topic.
+  # LM component `camera`
+  # (started by x5h-score-camera). Both ends must agree on the compressed topic.
   jpeg-bridge:
     image: ${VISIONPILOT_SI_IMAGE:-visionpilot:si}
     container_name: ces-jpeg-bridge
@@ -141,7 +142,7 @@ services:
     image: ${DEMO_IMAGE:-alpine:3.20}
     container_name: ces-demo
     network_mode: host
-    command: ["/bin/sh", "-c", "apk add --no-cache bash openssh-client >/dev/null && exec sleep infinity"]
+    command: ["/bin/sh", "-c", "apk add --no-cache bash openssh-client coreutils >/dev/null && exec sleep infinity"]
     environment:
       - X5H_BOARD=${X5H_BOARD:-root@192.168.0.20}
       - CARLA_PKG=/carla-pkg

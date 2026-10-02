@@ -414,6 +414,8 @@ reused — GATE6 and GATE7 are new, not GATE5's successor under a new name.
 | `GATE7_SELINUX_BOOLS_ABSENT` | `selinux-bools.service`'s `LoadState` reads `not-found` — the unit is missing from this image entirely. Disambiguates from `GATE7_SELINUX_BOOLS_OK`: `systemctl is-failed` alone exits nonzero both for "healthy" and for "does not exist", so without this check a dropped unit could otherwise print `_OK`. | no |
 | `GATE_RPMSG_ETH_UNIT_PASS` | GATE8: the `rpmsg-eth` TAP bridge daemon's own unit test (`rpmsg-eth/test-rpmsg-eth.sh`) passed inside its dedicated Fedora test container — real tap0 on the guest kernel under test, a mock endpoint (socat pty), `--network=none`. Requires both a zero `podman run` exit status and a literal `TEST_PASS` in its output (see `gate-guest.sh`'s GATE8 comment for why exit-status-alone is not sufficient). | yes |
 | `GATE_RPMSG_ETH_UNIT_FAIL` | The `rpmsg-eth` unit test failed — either the container/build step itself failed, or `test-rpmsg-eth.sh` ran and reported a `TEST_FAIL`. Not part of the pass path. | no |
+| `GATE9_SCORE_LM_OK` | The S-CORE launch manager reaches run target `Startup` with the gate configuration (one self-terminating Native component). The guest has no `x5h.role`, so `gate-guest.sh` runs `score/bin/launch_manager` directly. | yes |
+| `GATE9_SCORE_LM_FAIL` | The launch manager never logged `Completed the request for PG to State Startup`; the last 20 log lines follow. | no |
 | `GATE_DONE` | `gate-guest.sh` reached the end of its run. | yes |
 
 `qemu-gate.exp` exits 0 only if every "Required: yes" marker above is present
@@ -634,11 +636,14 @@ kernel/build-bsp-kernel.sh /tmp/x5h-kernel
 #    GATE2 finding. The third, rpmsg-eth-docker.tar, carries the daemon
 #    source and its pty-mock unit test for GATE8 to run in-guest.
 scripts/make-test-images.sh /tmp/x5h-testimages
+
+# 4. The S-CORE tar for GATE9 (x86_64 host; builds the aarch64 launch manager).
+score/build-score.sh /tmp/x5h-score aarch64
 ```
 
 Three things to know before running these, because CI runs no single host
-through all of them — the kernel builds in an x64 `build-kernel` job and
-everything else on native arm64 (`ubicloud-standard-16-arm`):
+through all of them — the kernel and the S-CORE tar build in x64 jobs
+(`build-kernel`, `build-score`) and everything else in a native arm64 job:
 
 - **Step 2 requires an x86_64 host, and brings its own compiler.** ARM ships
   no aarch64-hosted 13.2.Rel1 toolchain, so `build-bsp-kernel.sh`
@@ -769,7 +774,7 @@ rmdir "$mnt"
 #    redundant overwrite for a tar built from this branch, since the aib
 #    manifest already carries the file; it is kept so a replay against an
 #    older tar still gets it.
-./scripts/inject-test-images.sh /tmp/x5h-replay.ext4 "$TESTIMAGES" "$KERNELDIR"
+./scripts/inject-test-images.sh /tmp/x5h-replay.ext4 "$TESTIMAGES" "$KERNELDIR" /tmp/x5h-score/score-x5h-aarch64.tar
 
 # 3. Start the host listener GATE6_SNAT_OK probes. The guest reaches it as
 #    http://10.0.2.2:8099/, which slirp maps onto the host's
@@ -1050,11 +1055,11 @@ repo.
 
 The `demo` boot role runs two things in one boot: VisionPilot on the NPU, and the Safety
 Island on the CR52. Together they drive a CARLA-fed booth demo. See [selfboot.md](selfboot.md),
-"Roles", for the role itself. `x5h-demo.service` (`scripts/x5h-demo-up.sh`) starts four
-Quadlet container units plus one plain systemd unit at boot. When the Quadlet generator did
+"Roles", for the role itself. `x5h-demo.service` (`scripts/x5h-demo-up.sh`) starts six
+units at boot, in the order of the table below. When the Quadlet generator did
 not run, it regenerates the units itself. `x5h-mrm-demo.sh` uses the same recovery elsewhere.
 
-### The five units
+### The units
 
 | Unit | Role |
 | --- | --- |
@@ -1062,15 +1067,48 @@ not run, it regenerates the units itself. `x5h-mrm-demo.sh` uses the same recove
 | `x5h-demo-bridge.service` | The `domain_bridge` container. It joins DDS domain 1 (VisionPilot, host network) to domain 2 (the CR52, over `tap0`). [component-stack.md](component-stack.md) covers the bridge mechanics it shares with the MRM demo. |
 | `x5h-demo-restamp.service` | `control_restamp.py`. Republishes the CR52's `control_cmd_raw` as `control_cmd`, stamped with domain 1's clock instead of the CR52's own uptime. |
 | `x5h-demo-hb.service` | Turns every VisionPilot throttle command into `/safety_island/vp_heartbeat` for the CR52 to watch. |
-| `x5h-vp.service` | VisionPilot itself, on the NPU. Reads the CARLA camera feed over ROS 2. |
+| `score-datarouter.service` | The S-CORE datarouter. It sends the launch manager logs as DLT to rog-amd (192.168.0.1, UDP 3490). |
+| `score-lm.service` | The S-CORE launch manager. It starts and supervises the camera and VisionPilot containers. See "S-CORE launch manager" below. |
+
+### S-CORE launch manager
+
+`score-lm.service` runs the Eclipse S-CORE launch manager (LM). The LM starts and supervises the Open AD Kit containers. CI builds its binaries into `score-x5h-aarch64.tar` with `score/build-score.sh`. `stage-board.sh` unpacks the tar to `/usr/local/score` and refuses to continue without it.
+
+The LM configuration is `score/config/demo/launch_manager_config.json`. Run target `Startup` starts two components, `camera` and `visionpilot`. Only `visionpilot` is supervised. It reports ready with the file `/run/score/vp.ready`, and each frame has a deadline of `SCORE_VP_FRAME_MAX_MS=80`. If VisionPilot fails, the LM switches to `fallback_run_target`, which is `camera` and `si_fault`. `si_fault` runs `systemctl kill -s USR1 x5h-si-link.service` and ends. The camera stays in the fallback because the LM stops every component that the new target does not hold before it starts `si_fault`, and the camera took 0.68-2.17 s to exit on board 2. The Safety Island then stops the vehicle.
+
+Two exec scripts start the containers:
+
+| Script | Container | Journal tag |
+| --- | --- | --- |
+| `/usr/sbin/x5h-score-vp` | `x5h-vp`, with `--pid=host` because the `mw::log` PID check needs host PIDs | `x5h-vp` |
+| `/usr/sbin/x5h-score-camera` | `x5h-image-republish` | `x5h-camera` |
+
+Each script runs `systemd-cat -t <tag> podman run --log-driver=passthrough`. For this reason `podman logs` shows nothing. Use `journalctl -t x5h-vp` instead.
+
+`score-lm.service` has `Restart=no`. The Safety Island clears its staleness stop when it sees a fresh heartbeat. An automatic LM restart would drive the vehicle again with no operator present. Only the booth `reset` starts the LM again. `chrony` on the board syncs to rog-amd and steps the clock only in the first three updates after boot. See [companion-host.md](companion-host.md), "S-CORE demo: time and DLT on rog-amd".
+
+The booth commands inject the faults:
+
+| Command | Effect |
+| --- | --- |
+| `fault kill` | `pkill -KILL -x VisionPilot`. VisionPilot dies. |
+| `fault slow` | `pkill -USR1 -x VisionPilot`. VisionPilot runs slow and misses the frame deadline. |
+| `fault lm` | `systemctl kill -s KILL score-lm.service`. The LM dies. |
+| `reset` | `systemctl stop score-lm.service && systemctl kill -s USR2 x5h-si-link.service && systemctl start score-lm.service`. Stops the LM, clears the fault, and starts the LM again. The stop comes first, so a `si_fault` that the LM starts during the stop cannot latch the Safety Island after the clear. |
+
+Add `--at <epoch-s>` to a `fault` command to fire it at a fixed time. The script opens its ssh connection before the wait and fires over that connection, so the fault lands within a few milliseconds of `--at`. A cold ssh handshake and the podman CLI start made each fault land 0.44-0.75 s late on board 2. `score-soak-gate.sh` is gate SG2 and `vp-npu-gate.sh` is gate D5. D5 reads the journal.
+
+After `fault lm`, no container process survives. `podman ps` still lists `x5h-vp` and `x5h-image-republish` as running, even with `--sync`, because conmon died with them. The next `reset` removes these stale records with `--replace`. To check that no container is left, look at the processes (for example `pgrep -x VisionPilot`) or the cgroup. Do not use `podman ps`.
+
+`/run/score/vp.ready` stays after a VisionPilot kill until the next LM start. `score-lm.service` removes it in `ExecStartPre`. The LM tests the ready condition as soon as it starts VisionPilot, before `x5h-score-vp.sh` removes the file, so a leftover file ends `Startup` at once and alive supervision then fails. Because the file outlives a killed VisionPilot, `check` also needs a running VisionPilot process (`pgrep -x VisionPilot`) and a heartbeat with `fault=0`. After a fault, `check` reports a FAIL marker until `reset`. Run the steps in this order: fault, reset, check.
 
 ### The six markers
 
-- `X5H_DEMO_UP units=<n>`: `x5h-demo-up.sh` at boot. All five units started (or `X5H_DEMO_UP_FAIL reason=<unit|quadlet>`).
+- `X5H_DEMO_UP units=<n>`: `x5h-demo-up.sh` at boot. All six units started (or `X5H_DEMO_UP_FAIL reason=<unit|quadlet>`).
 - `RPMSG_LISTEN_PASS n=<n> gaps=<n>`: `rpmsg-ping -l` on the board. The CR52 heartbeat arrived on `rpmsg-si` with consecutive sequence numbers.
 - `VP_NPU_PASS frames=<n> wall_avg_ms=<ms> wall_max_ms=<ms>`: `vp-npu-gate.sh`, gate D5.
 - `SI_STOP_PASS`: `si_stop_gate.py` on the companion host (the `si-gate` compose service, gate D6). The CR52-authored stop was seen on domain 1 within the latency budget.
-- `X5H_CES_DEMO_READY sha=<sha> spawn=<idx> units=5 hb=<seq>`: `scripts/x5h-ces2027-demo.sh check`, on the companion host. Reads the package sha, the CARLA spawn index, and the heartbeat sequence together (or `X5H_CES_DEMO_FAIL reason=<slug>`).
+- `X5H_CES_DEMO_READY sha=<sha> spawn=<idx> units=6 hb=<seq>`: `scripts/x5h-ces2027-demo.sh check`, on the companion host. Reads the package sha, the CARLA spawn index, and the heartbeat sequence together. It also needs `/run/score/vp.ready`, a running VisionPilot process, and `fault=0` in the heartbeat (the Safety Island is not latched). Otherwise it prints `X5H_CES_DEMO_FAIL reason=<slug>`.
 - `DEMO_ROLE_PASS role=demo carveout=0x5da00000 vdev=0x5dc00000 remoteproc=<state>`: `demo-role-smoke.sh`, gate D1a. The board booted the `demo` role with the NPU tree intact, the CR52 carveout relocated, and all four carveouts `cr52_1` lists present under the names remoteproc looks them up by.
 
 ### The four CR52 carveouts
@@ -1109,15 +1147,18 @@ booth script itself needs only `ssh` to the board:
 
 ```
 x5h-ces2027-demo.sh check                 # ready? prints the READY/FAIL marker above
-x5h-ces2027-demo.sh run                   # prints the compose + board commands to bring the stack up
-x5h-ces2027-demo.sh fault kill|channel    # the demo moment
-x5h-ces2027-demo.sh reset                 # VisionPilot back, fault cleared
+x5h-ces2027-demo.sh run                   # prints the compose, board and reset commands to bring the stack up
+x5h-ces2027-demo.sh fault kill|slow|lm [--at <epoch-s>]   # the demo moment
+x5h-ces2027-demo.sh reset                 # fault cleared, launch manager and VisionPilot back
 ```
 
 `run` does not shell out to `docker` itself. That choice avoids mounting the host's
 `/var/run/docker.sock` into the `demo` container just to start its own compose siblings.
-Bringing the stack up is `docker compose`'s job. This script only prints the two commands
+Bringing the stack up is `docker compose`'s job. This script only prints the three commands
 the operator (or the `demo` container) needs.
+
+A board that booted before CARLA falls back after `ready_timeout` (60 s), and the board
+restart does not recover it. Run `reset` after CARLA is up: it is the last command `run` prints.
 
 ### Recording the demo reel
 
