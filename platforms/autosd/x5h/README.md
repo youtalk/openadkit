@@ -1132,7 +1132,7 @@ After `fault lm`, no container process survives. `podman ps` still lists `x5h-vp
 - `VP_NPU_PASS frames=<n> wall_avg_ms=<ms> wall_max_ms=<ms>`: `vp-npu-gate.sh`, gate D5.
 - `SI_STOP_PASS`: `si_stop_gate.py` on the companion host (the `si-gate` compose service, gate D6). The CR52-authored stop was seen on domain 1 within the latency budget.
 - `X5H_CES_DEMO_READY sha=<sha> spawn=<idx> units=6 hb=<seq>`: `scripts/x5h-ces2027-demo.sh check`, on the companion host. Reads the package sha, the CARLA spawn index, and the heartbeat sequence together. It also needs `/run/score/vp.ready`, a running VisionPilot process, and `fault=0` in the heartbeat (the Safety Island is not latched). Otherwise it prints `X5H_CES_DEMO_FAIL reason=<slug>`.
-- `DEMO_ROLE_PASS role=demo carveout=0x5da00000 vdev=0x5dc00000 remoteproc=<state>`: `demo-role-smoke.sh`, gate D1a. The board booted the `demo` role with the NPU tree intact, the CR52 carveout relocated, and all four carveouts `cr52_1` lists present under the names remoteproc looks them up by.
+- `DEMO_ROLE_PASS role=demo carveout=0x96650000 vdev=0x96400000 remoteproc=<state>`: `demo-role-smoke.sh`, gate D1a. The board booted the `demo` role on the derived cacr tree, with all four carveouts `cr52_1` lists present under the names remoteproc looks them up by.
 
 ### The four CR52 carveouts
 
@@ -1285,7 +1285,7 @@ or firmware blob name stays legible on screen.
 
 | Gate | Pass criteria | Deviation |
 | --- | --- | --- |
-| D1 (role boot) | Board 1 boots role `demo`. `remoteproc0` reaches `running`. `uio2` exists. `cmemdrv` logs all four regions with unchanged base and size. `/proc/iomem` shows the 2 MiB reservation at `0x5da00000` and the three `vdev0*` reservations above it (`demo-role-smoke.sh`, marker `DEMO_ROLE_PASS`). Pass: all true in one boot, twice. | None. |
+| D1 (role boot) | Board 1 boots role `demo`. `remoteproc0` reaches `running`. `uio2` exists. `cmemdrv` logs all four regions with unchanged base and size. `/proc/iomem` covers `cr52_ram1` at `0x96650000` and the three `vdev0*` windows at `0x96400000` (`demo-role-smoke.sh`, marker `DEMO_ROLE_PASS`). Pass: all true in one boot, twice. | None. |
 | D2 (payload) | One 1400-byte DDS sample crosses `tap0` unfragmented. `tcpdump` on the rog-amd side of the bridge shows one frame. Pass: zero `DATA_FRAG`. | None. |
 | D3 (channel) | The second RPMsg endpoint binds on Linux, and the CR52 heartbeat arrives at 1 Hz for 10 minutes (`rpmsg-ping -l`, marker `RPMSG_LISTEN_PASS`). Pass: 600 of 600 (`listen_loop` accepts `n_hb >= seconds - 2`, so 598 of 600 also passes). | None. |
 | D4 (lap) | VisionPilot drives the Town04 ring one full lap unaided, cross-track error under 1.0 m. Pass: one lap, no lane departure. | Runs on rog-amd with no board involved, so it can proceed in parallel with D1 to D3. |
