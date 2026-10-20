@@ -83,8 +83,11 @@ instead of on `autosd-store`, and the first symptom is a full root partition
 weeks later. The `part.*` keys of the manifest are the check:
 
 ```sh
-/usr/sbin/x5h-manifest.sh | grep -E '^part\.(x5h-boot|x5h-root|autosd-store)\b'
+ssh root@<board> sh -s < scripts/x5h-manifest.sh | grep -E '^part\.(x5h-boot|x5h-root|autosd-store)\b'
 ```
+
+Run the checkout's copy: an image built before the label-keyed manifest
+prints `part.0.*` keys instead.
 
 Expect three lines, keyed by label, whose values are `…5e01:ext4`,
 `…5e02:ext4` and `…5e03:btrfs`. The manifest keys partitions by label on
@@ -269,8 +272,9 @@ partition 1 of its own LU. Set `HAS_YOCTO=0` so that `x5h-role` refuses it.
 `stage-board.sh partition-lun2` does not apply, and `write-root` grows the
 root filesystem to its partition.
 
-To convert a board, it must have the factory three-LU map, and the companion
-needs about 25 GB free:
+To convert a board, it must have the factory three-LU map. The companion
+needs free space for the compressed images: 23 GB for board 2. If every
+partition is full, it needs up to 65 GB.
 
 1. Boot the board into the NFS rescue: halt, SW7, stop U-Boot,
    `run rescue_autosd`.
@@ -291,9 +295,14 @@ needs about 25 GB free:
    Boot the rescue again. UFS1 must show one LU of 255944818688 bytes.
 6. Run `scripts/ufs1-single-lu.sh <board> <dir> restore --yes`. It writes the
    GPT above, writes every image back with a sha256 check, grows the
-   filesystems, and compares the UUIDs with the backup.
-7. Halt, SW7, and let the board boot. Compare `x5h-manifest.sh` before and
-   after. Only the `size.*` keys and `/etc/x5h/board.conf` differ.
+   filesystems, and compares the UUIDs with the backup. It refuses a backup
+   that did not finish or that belongs to the other board.
+7. Still in the rescue, mount `x5h-root` and set `HAS_YOCTO=0` in its
+   `/etc/x5h/board.conf`. Set it in `boards/<board>.vars` too.
+8. Halt, SW7, and let the board boot. Compare the manifest before and after.
+   Only the `size.*` keys and `/etc/x5h/board.conf` differ. Until the image
+   ships this repository's `x5h-manifest.sh`, run it from the checkout:
+   `ssh root@<board> sh -s < scripts/x5h-manifest.sh`.
 
 To go back, write the rollback binary, power cycle, load the saved
 `lu1.gpt` and `lu2.gpt` with `sgdisk --load-backup`, and write the seven

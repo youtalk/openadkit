@@ -16,4 +16,6 @@ after=${wr#*readback_mismatch}
 grep -q 'resize2fs' <<<"$after" || fail write_root_does_not_grow
 grep -q 'STAGE_WRITE_FAIL reason=grow_failed' <<<"$after" || fail grow_failure_not_reported
 grep -q 'no_lun2_device.*single-LU' "$s" || fail lun2_message_silent_on_single_lu
+# The grow keeps its stderr, so grow_failed comes with the reason.
+grep -q 'resize2fs.*>/dev/null 2>&1' <<<"$after" && fail grow_hides_its_errors
 echo "TEST_PASS $name"

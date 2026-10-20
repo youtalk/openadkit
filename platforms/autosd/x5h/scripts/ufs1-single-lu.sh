@@ -34,23 +34,31 @@ LU=/dev/disk/by-path/platform-c0a90000.ufs-scsi-0:0:0
 # The board must run from the NFS rescue with no UFS partition mounted: a raw
 # image of a mounted filesystem is not consistent, and a write would corrupt it.
 rescue_check() {
-    local fstype
+    local fstype mounted
     fstype=$(run 'findmnt -n -o FSTYPE /') || die board_unreachable
     case $fstype in nfs|nfs4) ;; *) die not_in_rescue ;; esac
-    [ -z "$(run "grep '^/dev/sd' /proc/mounts")" ] || die ufs_mounted
+    # `; true` keeps grep's "no match" apart from a transport failure (255).
+    mounted=$(run "grep '^/dev/sd' /proc/mounts; true") || die board_unreachable
+    [ -z "$mounted" ] || die ufs_mounted
 }
 
-# "<by-path> <bytes>" for every UFS1 LU, partitions excluded.
+# "<by-path> <bytes>" for every UFS1 LU, partitions excluded. Callers run it
+# in $(...), so it returns its status instead of dying in the subshell.
 lus() {
-    run "for p in $LU:*; do case \$p in *-part*) continue ;; esac; echo \"\$p \$(blockdev --getsize64 \$p)\"; done" \
-        || die layout_probe_failed
+    run "for p in $LU:*; do case \$p in *-part*) continue ;; esac; echo \"\$p \$(blockdev --getsize64 \$p)\"; done"
 }
 
 backup() {
-    ls "$dir"/*.img.zst >/dev/null 2>&1 && die backup_dir_not_empty
+    # Any image or metadata means an earlier run used this directory: the
+    # sums and sizes would be appended to, and restore would read two values.
+    local f
+    for f in "$dir"/*.img.zst "$dir/SHA256SUMS" "$dir/sizes.txt" "$dir/board"; do
+        [ -e "$f" ] && die backup_dir_not_empty
+    done
     rescue_check
     local l n
-    l=$(lus); n=$(printf '%s\n' "$l" | grep -c .)
+    l=$(lus) || die layout_probe_failed
+    n=$(printf '%s\n' "$l" | grep -c .)
     [ "$n" -eq 3 ] && printf '%s\n' "$l" | grep -qxF "$LU:0 402653184" || die not_three_lu_layout
     echo "PLAN: e2fsck -n / btrfs check --readonly on: $LABELS"
     echo "PLAN: dd each partition and $LU:0 from $ip, zstd into $dir, sha256 on both ends"
@@ -82,6 +90,9 @@ backup() {
         printf '%s  %s\n' "$h" "$name" >> "$dir/SHA256SUMS"
         printf '%s %s\n' "$name" "$sz" >> "$dir/sizes.txt"
     done
+    # Written last: it marks the backup complete and binds it to this board,
+    # because the pinned PARTUUIDs are the same on both boards.
+    echo "$board" > "$dir/board" || die stamp_failed
     echo "${P}_PASS"
 }
 
@@ -95,15 +106,19 @@ GUID=7c94f5e2-9e2b-4c31-8f0a-1a2b3c4d5e
 restore() {
     rescue_check
     local l n dev name f args="" i=0 real p want bytes got
-    l=$(lus); n=$(printf '%s\n' "$l" | grep -c .)
+    l=$(lus) || die layout_probe_failed
+    n=$(printf '%s\n' "$l" | grep -c .)
     [ "$n" -eq 1 ] && printf '%s\n' "$l" | grep -qxF "$LU:0 255944818688" || die not_single_lu
     for name in $LABELS lu0; do [ -e "$dir/$name.img.zst" ] || die backup_incomplete; done
-    for f in SHA256SUMS sizes.txt blkid.txt; do [ -e "$dir/$f" ] || die backup_incomplete; done
+    for f in SHA256SUMS sizes.txt blkid.txt board; do [ -e "$dir/$f" ] || die backup_incomplete; done
+    [ "$(cat "$dir/board")" = "$board" ] || die backup_of_other_board
     dev=$LU:0
     for name in $LABELS; do
         args="$args -n$((i + 1)):0:${SIZES[i]} -t$((i + 1)):8300 -c$((i + 1)):$name -u$((i + 1)):$GUID${SUFFIX[i]}"
         i=$((i + 1))
     done
+    echo "PLAN: this DESTROYS everything on $dev of $board ($ip). Its current table:"
+    run "sgdisk -p $dev 2>&1" | sed 's/^/| /'
     echo "PLAN: sgdisk -o$args $dev"
     echo "PLAN: write each <label>.img.zst from $dir to /dev/disk/by-partlabel/<label>, sha256 checked"
     echo "PLAN: grow x5h-root and npu-work (resize2fs) and autosd-store (btrfs resize max)"
@@ -124,7 +139,9 @@ restore() {
         zstd -dc "$dir/$name.img.zst" \
             | ssh "${SSHO[@]}" "root@$ip" "dd of=/dev/disk/by-partlabel/$name bs=4M conv=fsync status=none" \
             || die "write_$name"
-        got=$(run "head -c $bytes /dev/disk/by-partlabel/$name | sha256sum" | cut -c1-64) || die "remote_hash_$name"
+        # flushbufs drops the cached pages, so the hash reads the device.
+        got=$(run "blockdev --flushbufs /dev/disk/by-partlabel/$name && head -c $bytes /dev/disk/by-partlabel/$name | sha256sum" | cut -c1-64) \
+            || die "remote_hash_$name"
         [ "$got" = "$want" ] || die "hash_mismatch_$name"
     done
     # e2fsck -p exits 1 when it fixed something, which is still a usable fs.

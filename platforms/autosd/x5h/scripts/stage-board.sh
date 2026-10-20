@@ -286,10 +286,11 @@ write_root() {
     raw=$($SSH "$readcmd | md5sum") || die "STAGE_WRITE_FAIL reason=readback_failed rc=$? target_state=written_unverified"
     got=${raw:0:32}
     [ "$want" = "$got" ] || die "STAGE_WRITE_FAIL reason=readback_mismatch want=$want got=$got"
-    # On a single-LU board x5h-root is bigger than the image: grow the
-    # filesystem to the partition (a no-op on the two-LUN map). e2fsck -p
-    # exits 1 when it fixed something, which is still a usable filesystem.
-    rc=0; $SSH "e2fsck -f -p $AUTOSD_ROOT; [ \$? -le 1 ] && resize2fs $AUTOSD_ROOT" < /dev/null >/dev/null 2>&1 || rc=$?
+    # The image (aib image_size, 6 GiB) is smaller than x5h-root (12 GiB on
+    # the two-LUN map, 24 GiB on the single LU), so grow the filesystem to the
+    # partition. e2fsck -p exits 1 when it fixed something, which is still a
+    # usable filesystem. stderr stays visible to explain a grow_failed.
+    rc=0; $SSH "e2fsck -f -p $AUTOSD_ROOT; [ \$? -le 1 ] && resize2fs $AUTOSD_ROOT" < /dev/null >/dev/null || rc=$?
     [ "$rc" -ne 255 ] || die "STAGE_WRITE_FAIL reason=grow_transport_lost rc=255"
     [ "$rc" -eq 0 ] || die "STAGE_WRITE_FAIL reason=grow_failed rc=$rc"
     mark "STAGE_WRITE_PASS md5=$got"

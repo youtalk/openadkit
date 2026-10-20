@@ -13,9 +13,10 @@ cat > "$d/bin/ssh" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FAKE_LOG"
 c=${!#}
+[ -n "${FAKE_FAIL:-}" ] && case $c in *"$FAKE_FAIL"*) exit 255 ;; esac
 case $c in
     *findmnt*) echo "${FAKE_ROOTFS:-nfs}" ;;
-    */proc/mounts*) exit 1 ;;
+    */proc/mounts*) ;;
     *getsize64*) printf "$FAKE_LUS" ;;
 esac
 exit 0
@@ -48,7 +49,7 @@ grep -q 'dd if=' "$d/ssh.log" && fail backup_plan_only_streamed
 mk_backup() {
     mkdir -p "$1"
     for n in x5h-boot x5h-root autosd-store yocto-boot yocto-root npu-work lu0; do : > "$1/$n.img.zst"; done
-    : > "$1/SHA256SUMS"; : > "$1/sizes.txt"; : > "$1/blkid.txt"
+    : > "$1/SHA256SUMS"; : > "$1/sizes.txt"; : > "$1/blkid.txt"; echo "${2:-x5h2}" > "$1/board"
 }
 mk_backup "$d/r"
 out=$(FAKE_LUS=$three bash "$s" x5h2 "$d/r" restore 2>&1)
@@ -66,5 +67,27 @@ grep -qE 'sgdisk -o|dd of=' "$d/ssh.log" && fail restore_plan_only_wrote
 mk_backup "$d/r2"; rm "$d/r2/npu-work.img.zst"
 out=$(FAKE_LUS=$one bash "$s" x5h2 "$d/r2" restore 2>&1)
 grep -q 'UFS1_RESTORE_FAIL reason=backup_incomplete' <<<"$out" || fail "backup_incomplete: $out"
+
+# --- final-review fixes --------------------------------------------------------
+# A backup that never finished, or that belongs to the other board, is refused.
+mk_backup "$d/r3"; rm "$d/r3/board"
+out=$(FAKE_LUS=$one bash "$s" x5h2 "$d/r3" restore 2>&1)
+grep -q 'UFS1_RESTORE_FAIL reason=backup_incomplete' <<<"$out" || fail "no_stamp_accepted: $out"
+mk_backup "$d/r4" x5h1
+out=$(FAKE_LUS=$one bash "$s" x5h2 "$d/r4" restore 2>&1)
+grep -q 'UFS1_RESTORE_FAIL reason=backup_of_other_board' <<<"$out" || fail "other_board_accepted: $out"
+# Leftover metadata from a failed backup counts as a used directory.
+mkdir "$d/meta"; : > "$d/meta/SHA256SUMS"
+out=$(FAKE_LUS=$three bash "$s" x5h2 "$d/meta" backup 2>&1)
+grep -q 'UFS1_BACKUP_FAIL reason=backup_dir_not_empty' <<<"$out" || fail "leftover_metadata_accepted: $out"
+# A transport failure is reported as one, not as a layout or a mount verdict.
+out=$(FAKE_FAIL=getsize64 FAKE_LUS=$one bash "$s" x5h2 "$d/r" restore 2>&1)
+grep -q 'UFS1_RESTORE_FAIL reason=layout_probe_failed' <<<"$out" || fail "probe_failure_misreported: $out"
+out=$(FAKE_FAIL=/proc/mounts FAKE_LUS=$one bash "$s" x5h2 "$d/r" restore 2>&1)
+grep -q 'UFS1_RESTORE_FAIL reason=board_unreachable' <<<"$out" || fail "mount_check_fails_open: $out"
+# The PLAN says that restore destroys, and the read-back bypasses the page cache.
+out=$(FAKE_LUS=$one bash "$s" x5h2 "$d/r" restore 2>&1)
+grep -q 'DESTROYS' <<<"$out" || fail "restore_plan_hides_destruction: $out"
+grep -q 'blockdev --flushbufs /dev/disk/by-partlabel/$name && head -c' "$s" || fail readback_through_page_cache
 
 echo "TEST_PASS $name"
