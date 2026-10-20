@@ -286,6 +286,12 @@ write_root() {
     raw=$($SSH "$readcmd | md5sum") || die "STAGE_WRITE_FAIL reason=readback_failed rc=$? target_state=written_unverified"
     got=${raw:0:32}
     [ "$want" = "$got" ] || die "STAGE_WRITE_FAIL reason=readback_mismatch want=$want got=$got"
+    # On a single-LU board x5h-root is bigger than the image: grow the
+    # filesystem to the partition (a no-op on the two-LUN map). e2fsck -p
+    # exits 1 when it fixed something, which is still a usable filesystem.
+    rc=0; $SSH "e2fsck -f -p $AUTOSD_ROOT; [ \$? -le 1 ] && resize2fs $AUTOSD_ROOT" < /dev/null >/dev/null 2>&1 || rc=$?
+    [ "$rc" -ne 255 ] || die "STAGE_WRITE_FAIL reason=grow_transport_lost rc=255"
+    [ "$rc" -eq 0 ] || die "STAGE_WRITE_FAIL reason=grow_failed rc=$rc"
     mark "STAGE_WRITE_PASS md5=$got"
 }
 
@@ -303,7 +309,7 @@ partition_lun2() {
     done <<<"$matches"
     case "${#mlist[@]}" in
         1) ;;
-        0) die "STAGE_LUN2_FAIL reason=no_lun2_device glob=$LUN2" ;;
+        0) die "STAGE_LUN2_FAIL reason=no_lun2_device glob=$LUN2 (on a single-LU board partition-lun2 does not apply, see selfboot.md)" ;;
         *) die "STAGE_LUN2_FAIL reason=ambiguous_lun2_device count=${#mlist[@]}" ;;
     esac
     dev=$($SSH "readlink -f ${mlist[0]}") || die "STAGE_LUN2_FAIL reason=lun2_readlink_failed rc=$?"
