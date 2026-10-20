@@ -123,10 +123,18 @@ need_yes() { [ "$yes" = --yes ] || { mark "PLAN ONLY: re-run with --yes to execu
 check_inputs() {
     local missing=0 f cfg ftype needle
     for f in Image-autosd extract-ikconfig r8a78000-ironhide-uio-autosd.dtb r8a78000-ironhide-npu-cacr.dtb \
-             x5h-rootfs.ext4 rpmsg-eth rpmsg-ping score-x5h-aarch64.tar "$CR52_ELF" npu/ort-rootfs npu/cmemdrv.ko npu/renesas_ep_eval_latency.py; do
+             x5h-rootfs.ext4 rpmsg-eth rpmsg-ping score-x5h-aarch64.tar "$CR52_ELF" npu/cmemdrv.ko \
+             npu/ort-2.0.1/infer npu/ort-2.0.1/lib/libonnxruntime.so.1 npu/ort-2.0.1/binary/arc_prog_npus/l1c0.bin \
+             npu/perf/merged/v7c64carla_frozen_s3cal_v201_artifacts/nnx/manifest.json; do
         [ -e "$inputs/$f" ] || { echo "MISSING $inputs/$f"; missing=1; }
     done
     [ $missing -eq 0 ] || die "STAGE_CHECK_FAIL reason=missing_inputs"
+    # stage-payload MIRRORS npu/ onto the board. Anything here built for the
+    # old memory map would land next to EP v2.0.1 on the cacr tree, where it
+    # addresses memory that the tree gives to something else.
+    for f in npu/ort-rootfs npu/renesas_ep_eval_latency.py; do
+        [ ! -e "$inputs/$f" ] || die "STAGE_CHECK_FAIL reason=old_map_payload path=$f"
+    done
     command -v dtc >/dev/null || die "STAGE_CHECK_FAIL reason=no_dtc"
     chmod +x "$inputs/extract-ikconfig" || die "STAGE_CHECK_FAIL reason=extract_ikconfig_not_executable"
     # Capture, then match on the string. The old `extract-ikconfig … | grep -qxF`

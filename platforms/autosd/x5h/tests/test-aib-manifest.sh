@@ -89,7 +89,7 @@ chmod_pairs=$(printf '%s\n' "$chmod_block" | awk '
 while IFS=$'\t' read -r src dest; do
     case "$src" in ../scripts/*) ;; *) continue ;; esac
     case "$dest" in /usr/sbin/*) ;; *) continue ;; esac
-    [ -x "$aibdir/$src" ] || continue          # data files (ort-rootfs.container*)
+    [ -x "$aibdir/$src" ] || continue          # data files, not programs
     mode=$(printf '%s\n' "$chmod_pairs" | awk -F'\t' -v d="$dest" '$1 == d { print $2 }')
     [ -n "$mode" ] || fail "executable_not_chmodded=$dest"
     [ "$mode" = 0755 ] || fail "wrong_mode=$dest mode=$mode"
