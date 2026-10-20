@@ -85,24 +85,31 @@ done
 
 # The partition scan must not run inside a pipeline: fail() in a subshell would
 # only kill the subshell and the manifest would come out short but "clean".
-disks=$(ls /dev/disk/by-path/ | grep 'ufs-scsi-0:0:0:[12]$' | sort)
+# Every GPT LU of UFS1 (c0a90000), whatever its LU number: a board on the
+# two-LUN map has LUs 1 and 2, a board on the single-LU map has LU 0 only.
+# Partitions are keyed by label, so the two layouts compare by PARTUUID and
+# filesystem type. The size is recorded but x5h-parity.sh does not compare it.
+disks=$(ls /dev/disk/by-path/ | grep '^platform-c0a90000\.ufs-scsi-0:0:0:[0-9]*$' | sort)
 [ -n "$disks" ] || fail no_disks
-i=0
+nparts=0
 for disk in $disks; do
     dev=$(readlink -f "/dev/disk/by-path/$disk") || fail readlink
+    [ "$(blkid -p -s PTTYPE -o value "$dev" 2>/dev/null)" = gpt ] || continue
     ptab=$(sgdisk -p "$dev") || fail sgdisk
     nums=$(printf '%s\n' "$ptab" | awk '/^ *[0-9]+ /{print $1}')
-    [ -n "$nums" ] || fail no_partitions
     for n in $nums; do
         info=$(sgdisk -i "$n" "$dev") || fail sgdisk
         label=$(printf '%s\n' "$info" | sed -n "s/^Partition name: '\(.*\)'/\1/p")
         size=$(printf '%s\n' "$info" | sed -n 's/^Partition size: [0-9]* sectors (\(.*\))/\1/p')
         uuid=$(printf '%s\n' "$info" | sed -n 's/^Partition unique GUID: //p' | tr 'A-F' 'a-f')
         [ -n "$uuid" ] || fail sgdisk_info
-        emit "part.$i.$n" "$label:$size:$uuid"
+        fstype=$(blkid -s TYPE -o value "/dev/disk/by-path/$disk-part$n" 2>/dev/null)
+        emit "part.$label" "$uuid:${fstype:-none}"
+        emit "size.$label" "$size"
+        nparts=$((nparts + 1))
     done
-    i=$((i + 1))
 done
+[ "$nparts" -gt 0 ] || fail no_partitions
 
 # Emit an fs.* key for every label unconditionally, "absent" when the partition
 # does not exist. A missing key would vanish symmetrically if blkid broke.

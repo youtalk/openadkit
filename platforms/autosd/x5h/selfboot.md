@@ -37,7 +37,9 @@ and partitions by partlabel or PARTUUID** — the `/dev/sdX` letters are
 assigned in probe order and move between boots, so a device letter that
 was right last boot can name a different LUN this boot.
 
-Both boards carry the same two-LUN map. `…5eXX` is shorthand for
+Both boards carry the single-LU map in "Single-LU UFS1" further down, since
+2026-10-20. The two-LUN map below is the factory layout that the conversion
+starts from. Both maps have the same labels and PARTUUIDs. `…5eXX` is shorthand for
 `7c94f5e2-9e2b-4c31-8f0a-1a2b3c4d5eXX`.
 
 LUN 1, the AutoSD LUN:
@@ -70,11 +72,12 @@ four places that must agree with the partition tables: `uboot/x5h-env.tmpl`
 them. `scripts/x5h-parity.sh` compares the whole partition map across the two
 boards as part of its manifest diff.
 
-**Only the LUN 2 table is written by anything in this repository.**
-`stage-board.sh partition-lun2` writes `…5e11/12/13` with explicit `sgdisk -u`
-flags. **The LUN 1 table, `…5e01/02/03`, is pre-existing on both boards and no
-script here creates it**; it was partitioned by hand and it holds the running
-AutoSD, so it is verified rather than rewritten. Verify it before converting a
+**On the two-LUN map, only the LUN 2 table is written by anything in this
+repository.** `stage-board.sh partition-lun2` writes `…5e11/12/13` with explicit
+`sgdisk -u` flags. **The LUN 1 table, `…5e01/02/03`, was partitioned by hand and
+no script here creates it**. It holds the running AutoSD, so it is verified
+rather than rewritten. On the single-LU map, `ufs1-single-lu.sh restore` writes
+the whole table once, with the same GUIDs. Verify it before converting a
 board, because every LUN 1 consumer above fails quietly rather than loudly if
 the GUIDs are wrong: `var-lib-containers.mount` is `nofail`, so a mismatched
 `…5e03` means the container store silently lands on the root filesystem
@@ -82,12 +85,16 @@ instead of on `autosd-store`, and the first symptom is a full root partition
 weeks later. The `part.*` keys of the manifest are the check:
 
 ```sh
-/usr/sbin/x5h-manifest.sh | grep '^part\.0\.'
+ssh root@<board> sh -s < scripts/x5h-manifest.sh | grep -E '^part\.(x5h-boot|x5h-root|autosd-store)\b'
 ```
 
-Expect three lines whose values end in `…5e01`, `…5e02` and `…5e03`, in that
-order, with labels `x5h-boot`, `x5h-root` and `autosd-store`. (`part.0.*` is
-the first LUN in `/dev/disk/by-path` order; `part.1.*` is LUN 2.) Anything
+Run the checkout's copy: an image built before the label-keyed manifest
+prints `part.0.*` keys instead.
+
+Expect three lines, keyed by label, whose values are `…5e01:ext4`,
+`…5e02:ext4` and `…5e03:btrfs`. The manifest keys partitions by label on
+both layouts, and `x5h-parity.sh` compares their PARTUUIDs and filesystem
+types but not their sizes. Anything
 else means the board is not on the pinned map and must be corrected before
 `write-root`, not after.
 
@@ -243,6 +250,66 @@ The active role is published twice by `x5h-role-banner.service`, from
 `/etc/motd.d` line for whoever logs in. Scripts read `/run/x5h/role`
 rather than re-parsing `/proc/cmdline`, so there is one parser.
 
+### Single-LU UFS1
+
+The factory UFS1 configuration exposes only 64.4 GiB of the 256 GB device,
+in three LUs. A rewrite of its Configuration Descriptor (JEDEC UFS) puts the
+whole device in LU 0 instead: 61022 allocation units of 4 MiB, 238.4 GiB.
+Both boards run this layout since 2026-10-20. The partition labels, PARTUUIDs
+and filesystem UUIDs are the same as on the two-LUN map, so the kernel
+command line, the mount units and U-Boot find them unchanged.
+
+| # | partlabel | size | fs | PARTUUID |
+|---|---|---|---|---|
+| 1 | `x5h-boot` | 1 GiB | ext4 | `…5e01` |
+| 2 | `x5h-root` | 24 GiB | ext4 | `…5e02` |
+| 3 | `autosd-store` | 128 GiB | btrfs | `…5e03` |
+| 4 | `yocto-boot` | 1 GiB | ext4 | `…5e11` |
+| 5 | `yocto-root` | 8 GiB | ext4 | `…5e12` |
+| 6 | `npu-work` | the rest, about 76 GiB | ext4 | `…5e13` |
+
+U-Boot sees the single LU as `scsi 1`, and `find_autosd` falls back to LU 1.
+The `yocto` role does not boot on this layout, because `load_yocto` reads
+partition 1 of its own LU. Set `HAS_YOCTO=0` so that `x5h-role` refuses it.
+`stage-board.sh partition-lun2` does not apply, and `write-root` grows the
+root filesystem to its partition.
+
+To convert a board, it must have the factory three-LU map. The companion
+needs free space for the compressed images: 23 GB for board 2 and 34 GB for
+board 1. If every partition is full, it needs up to 65 GB.
+
+1. Boot the board into the NFS rescue: halt, SW7, stop U-Boot,
+   `run rescue_autosd`.
+2. On the companion, run `scripts/ufs1-single-lu.sh <board> <dir> backup --yes`.
+   It refuses unless the root is NFS and no UFS partition is mounted. It
+   saves raw images of the six partitions and of LU 0, with a sha256 on both
+   ends. Keep this directory, because it is the only way back.
+3. Dump the descriptor with `ufs-utils desc -t 1 -p /dev/bsg/ufs-bsg1`
+   (SanDisk `ufs-utils`, a static arm64 build). Build two binaries with the
+   Renesas `ufs_config_gen` script: the target (LU 0 with 61022 units, LUs 1
+   and 2 disabled) and a rollback with the dumped values. Decode both and
+   compare them with the dump.
+4. Write the target with `ufs-utils desc -t 1 -w <target.bin> -p
+   /dev/bsg/ufs-bsg1` and read it back. Never write `bConfigDescrLock`,
+   because a locked descriptor can never change again. Never write to
+   `ufs-bsg0`: UFS0 holds the IPL and the CR52 slot.
+5. Halt, then switch SW7 off and on. The new layout takes effect at power-on.
+   Boot the rescue again. UFS1 must show one LU of 255944818688 bytes.
+6. Run `scripts/ufs1-single-lu.sh <board> <dir> restore --yes`. It writes the
+   GPT above, writes every image back with a sha256 check, grows the
+   filesystems, and compares the UUIDs with the backup. It refuses a backup
+   that did not finish or that belongs to the other board.
+7. Still in the rescue, mount `x5h-root` and set `HAS_YOCTO=0` in its
+   `/etc/x5h/board.conf`. Set it in `boards/<board>.vars` too.
+8. Halt, SW7, and let the board boot. Compare the manifest before and after.
+   Only the `size.*` keys and `/etc/x5h/board.conf` differ. Until the image
+   ships this repository's `x5h-manifest.sh`, run it from the checkout:
+   `ssh root@<board> sh -s < scripts/x5h-manifest.sh`.
+
+To go back, write the rollback binary, power cycle, load the saved
+`lu1.gpt` and `lu2.gpt` with `sgdisk --load-backup`, and write the seven
+images back.
+
 ### Finding the LU, every boot
 
 ```
@@ -259,7 +326,7 @@ storage complement. This U-Boot has no `part` command, so listing
 partitions across devices and picking programmatically is not available;
 probing for a file this repository puts there is the substitute.
 `find_yocto` does the same in the other direction, LU 3 then 2 then 1,
-probing for `Image-yocto`.
+probing for `Image-yocto`. On a single-LU board the whole of UFS1 is LU 1.
 
 Everything is preceded by `ufs init; scsi rescan` in `bootcmd`. `ufs init`
 brings up both UFS controllers and `scsi rescan` enumerates their logical
