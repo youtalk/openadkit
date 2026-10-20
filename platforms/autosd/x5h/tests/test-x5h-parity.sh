@@ -8,7 +8,11 @@ fail() { echo "TEST_FAIL $name reason=$1"; exit 1; }
 [ -f "$p" ] || fail script_missing
 [ -f "$mf" ] || fail manifest_missing
 d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
-v1="$here/../boards/x5h1.vars"; v2="$here/../boards/x5h2.vars"
+v1="$here/../boards/x5h1.vars"
+# A board with Yocto, so the HAS_YOCTO exemption stays covered whatever the
+# real boards carry today.
+v2="$d/x5h2-with-yocto.vars"
+printf 'BOARD_IP=192.168.0.21\nBOARD_HOSTNAME=autosd-x5h-2\nHAS_YOCTO=1\n' > "$v2"
 
 # Every manifest fixture must clear the completeness floor (kernel, cmdline,
 # env.md5, one boot.*, one unit.*) or parity refuses it before diffing.
