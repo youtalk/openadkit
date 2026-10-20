@@ -110,16 +110,15 @@ each is staged from (`boards/x5h1.vars`, `boards/x5h2.vars`).
 | Available roles | `demo`, `dev` | `demo`, `dev` |
 | `HAS_YOCTO` | `0` | `0` |
 | Hostname | `autosd-x5h` | `autosd-x5h-2` |
-| LUN 1 (AutoSD) | `x5h-boot` 1 GiB / `x5h-root` 12 GiB / `autosd-store` 19 GiB btrfs, PARTUUID `…5e01/02/03` | single-LU UFS1 (selfboot.md): the same six labels and PARTUUIDs on one LU, `x5h-root` 24 GiB, `autosd-store` 128 GiB, `npu-work` about 76 GiB |
-| LUN 2 | `yocto-boot` 1 GiB (empty) / `yocto-root` 8 GiB (empty) / `npu-work` rest, PARTUUID `…5e11/12/13` | none (see LUN 1) |
+| UFS1 | single-LU (selfboot.md, "Single-LU UFS1"): `x5h-boot` 1 GiB / `x5h-root` 24 GiB / `autosd-store` 128 GiB btrfs / `yocto-boot` 1 GiB (empty) / `yocto-root` 8 GiB (empty) / `npu-work` about 76 GiB, PARTUUID `…5e01/02/03/11/12/13` | identical, but its Yocto partitions keep the old Yocto images |
 | `x5h-boot` contents | `Image-autosd`, all three dtbs, `x5h-env.txt`, `x5h-role.txt` | identical |
 | CR52 slot | `actuation_x5h.elf` | identical (its silence remains the open escalation) |
 | Bootloader | Stage 2 AI-package chain, DRAM ECC off | identical |
 | Access | admin + dev + ext grants | admin only |
 
-`…5eXX` is shorthand for `7c94f5e2-9e2b-4c31-8f0a-1a2b3c4d5eXX`. Board 1 gets
-the whole LUN 2 map with its two Yocto partitions formatted and left empty,
-which is what lets one environment template serve both boards. The roles
+`…5eXX` is shorthand for `7c94f5e2-9e2b-4c31-8f0a-1a2b3c4d5eXX`. Both boards
+carry all six partitions, which is what lets one environment template serve
+both boards. Board 1's two Yocto partitions are formatted and empty. The roles
 themselves are described in [selfboot.md](selfboot.md), "Roles".
 
 Two consequences worth stating plainly:
