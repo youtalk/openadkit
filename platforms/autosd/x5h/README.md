@@ -428,7 +428,7 @@ in the session log (with the fstype-qualified ones matching exactly, e.g.
 > **This section is the netboot path, which is now the rescue path.** A board
 > in normal service self-boots from UFS and is staged by
 > `scripts/stage-board.sh <x5h1|x5h2> <inputs-dir> <subcommand> [--yes]`, which
-> writes the root, the boot partition, the second LUN and the NPU payload from
+> writes the root, the boot partition, the second LUN (two-LUN boards only) and the NPU payload from
 > one place and reads the board's identity only from `boards/<board>.vars`.
 > Every destructive subcommand requires `--yes` and prints its plan first. See
 > [selfboot.md](selfboot.md), "Staging a board", for the subcommand order and

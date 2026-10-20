@@ -107,11 +107,11 @@ each is staged from (`boards/x5h1.vars`, `boards/x5h2.vars`).
 | | Board 1 `192.168.0.20` | Board 2 `192.168.0.21` |
 |---|---|---|
 | Default role | `dev` | `dev` |
-| Available roles | `demo`, `dev` | `demo`, `dev`, `yocto` |
-| `HAS_YOCTO` | `0` | `1` |
-| Hostname | `autosd-x5h` | `autosd-x5h-2` (`yocto-x5h-2` in the `yocto` role) |
-| LUN 1 (AutoSD) | `x5h-boot` 1 GiB / `x5h-root` 12 GiB / `autosd-store` 19 GiB btrfs, PARTUUID `…5e01/02/03` | identical |
-| LUN 2 | `yocto-boot` 1 GiB (empty) / `yocto-root` 8 GiB (empty) / `npu-work` rest, PARTUUID `…5e11/12/13` | same map, Yocto partitions populated |
+| Available roles | `demo`, `dev` | `demo`, `dev` |
+| `HAS_YOCTO` | `0` | `0` |
+| Hostname | `autosd-x5h` | `autosd-x5h-2` |
+| LUN 1 (AutoSD) | `x5h-boot` 1 GiB / `x5h-root` 12 GiB / `autosd-store` 19 GiB btrfs, PARTUUID `…5e01/02/03` | single-LU UFS1 (selfboot.md): the same six labels and PARTUUIDs on one LU, `x5h-root` 24 GiB, `autosd-store` 128 GiB, `npu-work` about 76 GiB |
+| LUN 2 | `yocto-boot` 1 GiB (empty) / `yocto-root` 8 GiB (empty) / `npu-work` rest, PARTUUID `…5e11/12/13` | none (see LUN 1) |
 | `x5h-boot` contents | `Image-autosd`, all three dtbs, `x5h-env.txt`, `x5h-role.txt` | identical |
 | CR52 slot | `actuation_x5h.elf` | identical (its silence remains the open escalation) |
 | Bootloader | Stage 2 AI-package chain, DRAM ECC off | identical |
@@ -130,8 +130,10 @@ Two consequences worth stating plainly:
   therefore reachable by every root login on board 1. That is accepted, and
   the Tailscale ACL below is deliberately unchanged.
 - **Board 2 is not the Yocto appliance any more.** Its default personality is
-  AutoSD in the `dev` role, like board 1; Yocto survives as a third role on
-  its second LUN, for vendor-kernel reproduction and vendor reports.
+  AutoSD in the `dev` role, like board 1. Since its single-LU conversion on
+  2026-10-20 the `yocto` role does not boot: the Yocto partitions keep their
+  content, but `load_yocto` reads partition 1 of its own LU. The way back is
+  the conversion backup (selfboot.md, "Single-LU UFS1").
 
 ## 1. Base packages and tailnet
 
@@ -786,7 +788,8 @@ The second command is the one that proves the mountd rule earns its place:
 over TCP, which the original 69/111/2049 ruleset would have dropped.
 
 Two expected results that are not faults: the netbooted AutoSD root is the
-pre-self-boot image and has **no sshd**, so verify it over serial; and
+unified image (rebuilt on 2026-09-02) and runs `sshd` with a host key of
+its own, so do not pin that key; and
 podman logs overlayfs complaints there because its store cannot sit on NFS,
 which is exactly why self-boot uses a btrfs partition instead.
 
