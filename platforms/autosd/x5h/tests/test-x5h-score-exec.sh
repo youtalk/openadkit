@@ -33,6 +33,18 @@ for s in "$here/../scripts/x5h-score-camera.sh" "$here/../score/sil/sil-camera.s
         grep -q -- "$tok" <<<"$body" || fail "$(basename "$s")_missing_$tok"
     done
 done
+# EP v2.0.1 and the cacr map. The ARC set must come from the same release as
+# the EP library, so the board script mounts no ARC set of its own and both
+# configs point the EP at the set shipped with it. The EP appends
+# /arc_prog_npus itself, so the path is its parent. The artifact set is the
+# one compiled with EP v2.0.1: EP v1.1.0 sets do not run on it.
+grep -q 'arc_prog_npus\|ort-rootfs' <<<"$(code "$board")" && fail board_overrides_arc_set
+for c in vision_pilot.conf vision_pilot.capture.conf; do
+    conf="$here/../components/demo/$c"
+    grep -qx 'engine.arc_prog_path *= /npu/ort-2.0.1/binary' "$conf" || fail "arc_prog_path_$c"
+    grep -qx 'engine.artifacts_dir *= /npu/perf/merged/v7c64carla_frozen_s3cal_v201_artifacts' "$conf" || fail "artifacts_dir_$c"
+    grep -qx 'model.merged_path *= /npu/perf/merged/v7c64carla_frozen_s3cal_v201_artifacts/v7c64carla_frozen.onnx' "$conf" || fail "merged_path_$c"
+done
 # Run the board VisionPilot script with fake systemd-cat and podman.
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/run"
