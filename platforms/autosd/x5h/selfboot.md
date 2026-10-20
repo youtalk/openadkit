@@ -37,8 +37,9 @@ and partitions by partlabel or PARTUUID** — the `/dev/sdX` letters are
 assigned in probe order and move between boots, so a device letter that
 was right last boot can name a different LUN this boot.
 
-Board 1 carries the two-LUN map below. Board 2 carries the single-LU map in
-"Single-LU UFS1" further down, with the same labels and PARTUUIDs. `…5eXX` is shorthand for
+Both boards carry the single-LU map in "Single-LU UFS1" further down, since
+2026-10-20. The two-LUN map below is the factory layout that the conversion
+starts from. Both maps have the same labels and PARTUUIDs. `…5eXX` is shorthand for
 `7c94f5e2-9e2b-4c31-8f0a-1a2b3c4d5eXX`.
 
 LUN 1, the AutoSD LUN:
@@ -71,11 +72,12 @@ four places that must agree with the partition tables: `uboot/x5h-env.tmpl`
 them. `scripts/x5h-parity.sh` compares the whole partition map across the two
 boards as part of its manifest diff.
 
-**Only the LUN 2 table is written by anything in this repository.**
-`stage-board.sh partition-lun2` writes `…5e11/12/13` with explicit `sgdisk -u`
-flags. **The LUN 1 table, `…5e01/02/03`, is pre-existing on both boards and no
-script here creates it**; it was partitioned by hand and it holds the running
-AutoSD, so it is verified rather than rewritten. Verify it before converting a
+**On the two-LUN map, only the LUN 2 table is written by anything in this
+repository.** `stage-board.sh partition-lun2` writes `…5e11/12/13` with explicit
+`sgdisk -u` flags. **The LUN 1 table, `…5e01/02/03`, was partitioned by hand and
+no script here creates it**. It holds the running AutoSD, so it is verified
+rather than rewritten. On the single-LU map, `ufs1-single-lu.sh restore` writes
+the whole table once, with the same GUIDs. Verify it before converting a
 board, because every LUN 1 consumer above fails quietly rather than loudly if
 the GUIDs are wrong: `var-lib-containers.mount` is `nofail`, so a mismatched
 `…5e03` means the container store silently lands on the root filesystem
@@ -253,7 +255,7 @@ rather than re-parsing `/proc/cmdline`, so there is one parser.
 The factory UFS1 configuration exposes only 64.4 GiB of the 256 GB device,
 in three LUs. A rewrite of its Configuration Descriptor (JEDEC UFS) puts the
 whole device in LU 0 instead: 61022 allocation units of 4 MiB, 238.4 GiB.
-Board 2 runs this layout since 2026-10-20. The partition labels, PARTUUIDs
+Both boards run this layout since 2026-10-20. The partition labels, PARTUUIDs
 and filesystem UUIDs are the same as on the two-LUN map, so the kernel
 command line, the mount units and U-Boot find them unchanged.
 
@@ -273,8 +275,8 @@ partition 1 of its own LU. Set `HAS_YOCTO=0` so that `x5h-role` refuses it.
 root filesystem to its partition.
 
 To convert a board, it must have the factory three-LU map. The companion
-needs free space for the compressed images: 23 GB for board 2. If every
-partition is full, it needs up to 65 GB.
+needs free space for the compressed images: 23 GB for board 2 and 34 GB for
+board 1. If every partition is full, it needs up to 65 GB.
 
 1. Boot the board into the NFS rescue: halt, SW7, stop U-Boot,
    `run rescue_autosd`.
