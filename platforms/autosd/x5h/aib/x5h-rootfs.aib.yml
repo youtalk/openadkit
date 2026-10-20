@@ -224,10 +224,6 @@ content:
       path: /etc/systemd/system/var-opt-npu.mount
     - source_path: ../scripts/npu-contract-smoke.sh
       path: /usr/sbin/npu-contract-smoke.sh
-    - source_path: ../scripts/ort-rootfs.containerfile
-      path: /usr/sbin/ort-rootfs.containerfile
-    - source_path: ../scripts/ort-rootfs.containerignore
-      path: /usr/sbin/ort-rootfs.containerignore
     # --- demo role: CES 2027 single-ECU stack (issue #120, this milestone) --
     - source_path: ../config/x5h-si-link.service
       path: /etc/systemd/system/x5h-si-link.service
@@ -499,8 +495,6 @@ content:
   # /usr/sbin script the add_files block installs. tests/test-aib-manifest.sh
   # asserts that correspondence in both directions, so a script added above
   # without a line here fails the host tests rather than the next board boot.
-  # The two ort-rootfs.container* files are deliberately absent: they are data
-  # read by `podman build`, not programs.
   chmod_files:
     - path: /usr/sbin/x5h-role
       mode: "0755"

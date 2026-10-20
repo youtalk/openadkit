@@ -52,9 +52,9 @@ LUN 2:
 
 | # | partlabel | size | fs | PARTUUID | contents |
 |---|---|---|---|---|---|
-| 1 | `yocto-boot` | 1 GiB | ext4 | `…5e11` | `Image-yocto` and the vendor dtb, for the `yocto` role |
+| 1 | `yocto-boot` | 1 GiB | ext4 | `…5e11` | `Image-yocto` and the derived tree `r8a78000-ironhide-demo.dtb`, for the `yocto` role |
 | 2 | `yocto-root` | 8 GiB | ext4 | `…5e12` | vendor Yocto rootfs, root of the `yocto` role |
-| 3 | `npu-work` | rest | ext4 | `…5e13` | mounted at `/var/opt/npu`: `cmemdrv.ko`, `ort-rootfs`, artifact sets |
+| 3 | `npu-work` | rest | ext4 | `…5e13` | mounted at `/var/opt/npu`: `cmemdrv.ko`, the EP v2.0.1 package `ort-2.0.1`, the vendor `hostapp`, artifact sets |
 
 A board with `HAS_YOCTO=0` in its variables file still gets the whole LUN 2
 map, with `yocto-boot` and `yocto-root` formatted and left empty. That is
@@ -120,13 +120,15 @@ which root filesystem is mounted, and which units start.
 |---|---|---|---|
 | `demo` | `Image-autosd` + `r8a78000-ironhide-demo.dtb` | `…5e02` | the platform layer, plus the CES 2027 demo stack, which starts itself |
 | `dev` | the same kernel and the same derived tree | `…5e02` | the platform layer only, and no application containers |
-| `yocto` | `Image-yocto` + the vendor dtb | `…5e12` | the vendor Yocto appliance, on boards with `HAS_YOCTO=1` |
+| `yocto` | `Image-yocto` + the same derived tree | `…5e12` | the vendor Yocto appliance, on boards with `HAS_YOCTO=1` |
 
 The **platform layer** is `var-opt-npu.mount`, `x5h-npu.service`
 (`cmemdrv`, `/dev/npuc*`), `cr52-remoteproc.service` and
 `rpmsg-eth.service`: the NPU and the CR52 link. Both AD Kit roles bring all
-of it up. The derived blob is produced from the vendor NPU tree at staging
-time by `uboot/make-demo-dtb.sh` and is never committed.
+of it up. The derived blob is produced from the vendor cacr tree at staging
+time by `uboot/make-demo-dtb.sh` and is never committed. `write-boot` puts it
+on `x5h-boot` only. On a board with `HAS_YOCTO=1`, copy it to `yocto-boot` by
+hand after every `write-boot`, because the `yocto` role loads it from there.
 
 `dev` is the default. `stage-board.sh` writes it onto a freshly staged
 board, and an invalid or unreadable role file falls back to it, on the

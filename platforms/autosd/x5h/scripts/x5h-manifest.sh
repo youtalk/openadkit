@@ -63,7 +63,7 @@ for dir in /etc/systemd/system /etc/containers /etc/modprobe.d /etc/modules-load
     [ -d "$dir" ] || continue
     find "$dir" -type f | sort | while read -r f; do emit "file.$f" "$(md5 "$f")"; done
 done
-for f in /etc/hostname /usr/sbin/x5h-* /usr/sbin/*rpmsg* /usr/sbin/cr52-* /usr/sbin/npu-* /usr/sbin/selfboot-* /usr/sbin/ort-rootfs.* /usr/local/bin/rpmsg-eth /etc/ssh/ssh_host_*_key.pub; do
+for f in /etc/hostname /usr/sbin/x5h-* /usr/sbin/*rpmsg* /usr/sbin/cr52-* /usr/sbin/npu-* /usr/sbin/selfboot-* /usr/local/bin/rpmsg-eth /etc/ssh/ssh_host_*_key.pub; do
     [ -f "$f" ] && emit "file.$f" "$(md5 "$f")"
 done
 
