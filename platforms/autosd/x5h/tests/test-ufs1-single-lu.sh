@@ -44,4 +44,27 @@ out=$(FAKE_LUS=$three bash "$s" x5h2 "$d/b3" backup 2>&1)
 grep -q 'PLAN ONLY' <<<"$out" || fail "backup_plan_only: $out"
 grep -q 'dd if=' "$d/ssh.log" && fail backup_plan_only_streamed
 
+# --- restore -----------------------------------------------------------------
+mk_backup() {
+    mkdir -p "$1"
+    for n in x5h-boot x5h-root autosd-store yocto-boot yocto-root npu-work lu0; do : > "$1/$n.img.zst"; done
+    : > "$1/SHA256SUMS"; : > "$1/sizes.txt"; : > "$1/blkid.txt"
+}
+mk_backup "$d/r"
+out=$(FAKE_LUS=$three bash "$s" x5h2 "$d/r" restore 2>&1)
+grep -q 'UFS1_RESTORE_FAIL reason=not_single_lu' <<<"$out" || fail "not_single_lu: $out"
+
+: > "$d/ssh.log"
+out=$(FAKE_LUS=$one bash "$s" x5h2 "$d/r" restore 2>&1)
+grep -q 'PLAN ONLY' <<<"$out" || fail "restore_plan_only: $out"
+for want in '-c1:x5h-boot -u1:7c94f5e2-9e2b-4c31-8f0a-1a2b3c4d5e01' '-n2:0:+24G' '-n3:0:+128G' \
+            '-c6:npu-work -u6:7c94f5e2-9e2b-4c31-8f0a-1a2b3c4d5e13' '-n6:0:0'; do
+    grep -qF -- "$want" <<<"$out" || fail "restore_plan_missing: $want"
+done
+grep -qE 'sgdisk -o|dd of=' "$d/ssh.log" && fail restore_plan_only_wrote
+
+mk_backup "$d/r2"; rm "$d/r2/npu-work.img.zst"
+out=$(FAKE_LUS=$one bash "$s" x5h2 "$d/r2" restore 2>&1)
+grep -q 'UFS1_RESTORE_FAIL reason=backup_incomplete' <<<"$out" || fail "backup_incomplete: $out"
+
 echo "TEST_PASS $name"

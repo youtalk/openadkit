@@ -85,7 +85,64 @@ backup() {
     echo "${P}_PASS"
 }
 
+# The new GPT keeps every label and GUID of the two-LUN map, so the kernel
+# command line, the mount units and U-Boot (partition 1 of the LU) all find
+# their partitions unchanged. Only the sizes and the partition numbers change.
+SIZES=(+1G +24G +128G +1G +8G 0)
+SUFFIX=(01 02 03 11 12 13)
+GUID=7c94f5e2-9e2b-4c31-8f0a-1a2b3c4d5e
+
+restore() {
+    rescue_check
+    local l n dev name f args="" i=0 real p want bytes got
+    l=$(lus); n=$(printf '%s\n' "$l" | grep -c .)
+    [ "$n" -eq 1 ] && printf '%s\n' "$l" | grep -qxF "$LU:0 255944818688" || die not_single_lu
+    for name in $LABELS lu0; do [ -e "$dir/$name.img.zst" ] || die backup_incomplete; done
+    for f in SHA256SUMS sizes.txt blkid.txt; do [ -e "$dir/$f" ] || die backup_incomplete; done
+    dev=$LU:0
+    for name in $LABELS; do
+        args="$args -n$((i + 1)):0:${SIZES[i]} -t$((i + 1)):8300 -c$((i + 1)):$name -u$((i + 1)):$GUID${SUFFIX[i]}"
+        i=$((i + 1))
+    done
+    echo "PLAN: sgdisk -o$args $dev"
+    echo "PLAN: write each <label>.img.zst from $dir to /dev/disk/by-partlabel/<label>, sha256 checked"
+    echo "PLAN: grow x5h-root and npu-work (resize2fs) and autosd-store (btrfs resize max)"
+    need_yes
+
+    run "sgdisk -o$args $dev >/dev/null && blockdev --rereadpt $dev && udevadm settle" || die partition_failed
+    # udev can still hold the OLD by-partlabel links; prove each one is on the new LU.
+    real=$(run "readlink -f $dev") || die readlink_failed
+    for name in $LABELS; do
+        p=$(run "readlink -f /dev/disk/by-partlabel/$name") || die "partlabel_missing_$name"
+        case $p in "$real"[0-9]*) ;; *) die "partlabel_not_on_target_$name" ;; esac
+    done
+    for name in $LABELS; do
+        echo "== $name"
+        want=$(awk -v n="$name" '$2 == n {print $1}' "$dir/SHA256SUMS")
+        bytes=$(awk -v n="$name" '$1 == n {print $2}' "$dir/sizes.txt")
+        [ -n "$want" ] && [ -n "$bytes" ] || die "backup_incomplete_$name"
+        zstd -dc "$dir/$name.img.zst" \
+            | ssh "${SSHO[@]}" "root@$ip" "dd of=/dev/disk/by-partlabel/$name bs=4M conv=fsync status=none" \
+            || die "write_$name"
+        got=$(run "head -c $bytes /dev/disk/by-partlabel/$name | sha256sum" | cut -c1-64) || die "remote_hash_$name"
+        [ "$got" = "$want" ] || die "hash_mismatch_$name"
+    done
+    # e2fsck -p exits 1 when it fixed something, which is still a usable fs.
+    for name in x5h-root npu-work; do
+        p=/dev/disk/by-partlabel/$name
+        run "e2fsck -f -p $p; [ \$? -le 1 ] && resize2fs $p" > "$dir/grow-$name.txt" 2>&1 || die "grow_$name"
+    done
+    run 'm=$(mktemp -d) && mount /dev/disk/by-partlabel/autosd-store $m && { btrfs filesystem resize max $m; r=$?; umount $m; rmdir $m; exit $r; }' \
+        > "$dir/grow-autosd-store.txt" 2>&1 || die grow_autosd-store
+    for name in $LABELS; do
+        want=$(grep "PARTLABEL=\"$name\"" "$dir/blkid.txt" | grep -oE ' (UUID|PARTUUID)="[^"]*"' | sort | tr -d '\n')
+        got=$(run "blkid /dev/disk/by-partlabel/$name" | grep -oE ' (UUID|PARTUUID)="[^"]*"' | sort | tr -d '\n')
+        [ -n "$want" ] && [ "$got" = "$want" ] || die "id_mismatch_$name"
+    done
+    echo "${P}_PASS"
+}
+
 case $cmd in
     backup) backup ;;
-    restore) die not_implemented ;;
+    restore) restore ;;
 esac
