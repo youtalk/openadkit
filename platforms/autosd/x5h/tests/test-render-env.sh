@@ -56,7 +56,7 @@ for role in demo dev; do
     printf '%s\n' "$e1" | grep "^bootcmd_${role}=" | grep -q '&& booti' || fail "bootcmd_${role}_booti_not_chained"
 done
 # demo and dev boot the SAME kernel image and the SAME derived tree, which is
-# the NPU tree plus the relocated CR52 carveout (uboot/make-demo-dtb.sh).
+# the vendor cacr tree plus the rpmsg windows (uboot/make-demo-dtb.sh).
 # They share one loader, so a divergence here would mean the two roles no
 # longer agree on the memory map, which is the whole point of collapsing them.
 for role in demo dev; do
@@ -64,6 +64,11 @@ for role in demo dev; do
     printf '%s\n' "$e1" | grep "^bootcmd_${role}=" | grep -q "run load_adk && setenv bootargs \${bootargs_${role}} && booti 0x61080000 - 0x61000000" || fail "bootcmd_${role}_chain"
 done
 printf '%s\n' "$e1" | grep '^load_adk=' | grep -q 'Image-autosd && ext4load scsi ${lu}:1 0x61000000 r8a78000-ironhide-demo.dtb' || fail load_adk_files
+# yocto boots the derived tree too: EP v2.0.1 and host_app 0.10.4 need the
+# cacr map, and the vendor tree has no rpmsg windows. No role may boot a
+# vendor tree directly.
+printf '%s\n' "$e1" | grep '^load_yocto=' | grep -q 'Image-yocto && ext4load scsi ${lu}:1 0x61000000 r8a78000-ironhide-demo.dtb' || fail load_yocto_files
+printf '%s\n' "$e1" | grep -q 'ironhide-npu' && fail vendor_tree_booted
 # No placeholder survives rendering, and no line is empty (env import -t would still accept it, but it hides mistakes).
 printf '%s\n' "$e1" | grep -q '@' && fail placeholder_left
 printf '%s\n' "$e1" | grep -q '^$' && fail empty_line

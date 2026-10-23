@@ -122,11 +122,19 @@ need_yes() { [ "$yes" = --yes ] || { mark "PLAN ONLY: re-run with --yes to execu
 
 check_inputs() {
     local missing=0 f cfg ftype needle
-    for f in Image-autosd extract-ikconfig r8a78000-ironhide-uio-autosd.dtb r8a78000-ironhide-npu.dtb \
-             x5h-rootfs.ext4 rpmsg-eth rpmsg-ping score-x5h-aarch64.tar "$CR52_ELF" npu/ort-rootfs npu/cmemdrv.ko npu/renesas_ep_eval_latency.py; do
+    for f in Image-autosd extract-ikconfig r8a78000-ironhide-uio-autosd.dtb r8a78000-ironhide-npu-cacr.dtb \
+             x5h-rootfs.ext4 rpmsg-eth rpmsg-ping score-x5h-aarch64.tar "$CR52_ELF" npu/cmemdrv.ko \
+             npu/ort-2.0.1/infer npu/ort-2.0.1/lib/libonnxruntime.so.1 npu/ort-2.0.1/binary/arc_prog_npus/l1c0.bin \
+             npu/perf/merged/v7c64carla_frozen_s3cal_v201_artifacts/nnx/manifest.json; do
         [ -e "$inputs/$f" ] || { echo "MISSING $inputs/$f"; missing=1; }
     done
     [ $missing -eq 0 ] || die "STAGE_CHECK_FAIL reason=missing_inputs"
+    # stage-payload MIRRORS npu/ onto the board. Anything here built for the
+    # old memory map would land next to EP v2.0.1 on the cacr tree, where it
+    # addresses memory that the tree gives to something else.
+    for f in npu/ort-rootfs npu/renesas_ep_eval_latency.py; do
+        [ ! -e "$inputs/$f" ] || die "STAGE_CHECK_FAIL reason=old_map_payload path=$f"
+    done
     command -v dtc >/dev/null || die "STAGE_CHECK_FAIL reason=no_dtc"
     chmod +x "$inputs/extract-ikconfig" || die "STAGE_CHECK_FAIL reason=extract_ikconfig_not_executable"
     # Capture, then match on the string. The old `extract-ikconfig … | grep -qxF`
@@ -286,6 +294,13 @@ write_root() {
     raw=$($SSH "$readcmd | md5sum") || die "STAGE_WRITE_FAIL reason=readback_failed rc=$? target_state=written_unverified"
     got=${raw:0:32}
     [ "$want" = "$got" ] || die "STAGE_WRITE_FAIL reason=readback_mismatch want=$want got=$got"
+    # The image (aib image_size, 6 GiB) is smaller than x5h-root (12 GiB on
+    # the two-LUN map, 24 GiB on the single LU), so grow the filesystem to the
+    # partition. e2fsck -p exits 1 when it fixed something, which is still a
+    # usable filesystem. stderr stays visible to explain a grow_failed.
+    rc=0; $SSH "e2fsck -f -p $AUTOSD_ROOT; [ \$? -le 1 ] && resize2fs $AUTOSD_ROOT" < /dev/null >/dev/null || rc=$?
+    [ "$rc" -ne 255 ] || die "STAGE_WRITE_FAIL reason=grow_transport_lost rc=255"
+    [ "$rc" -eq 0 ] || die "STAGE_WRITE_FAIL reason=grow_failed rc=$rc"
     mark "STAGE_WRITE_PASS md5=$got"
 }
 
@@ -303,7 +318,7 @@ partition_lun2() {
     done <<<"$matches"
     case "${#mlist[@]}" in
         1) ;;
-        0) die "STAGE_LUN2_FAIL reason=no_lun2_device glob=$LUN2" ;;
+        0) die "STAGE_LUN2_FAIL reason=no_lun2_device glob=$LUN2 (on a single-LU board partition-lun2 does not apply, see selfboot.md)" ;;
         *) die "STAGE_LUN2_FAIL reason=ambiguous_lun2_device count=${#mlist[@]}" ;;
     esac
     dev=$($SSH "readlink -f ${mlist[0]}") || die "STAGE_LUN2_FAIL reason=lun2_readlink_failed rc=$?"
@@ -371,14 +386,15 @@ write_boot() {
     local f keep="" manifest="" line
     rm -rf "$d" || die "STAGE_BOOT_FAIL reason=work_dir_cleanup_failed dir=$d"
     mkdir -p "$d" || die "STAGE_BOOT_FAIL reason=work_dir_unwritable dir=$d"
-    cp "$inputs/Image-autosd" "$inputs/r8a78000-ironhide-uio-autosd.dtb" "$inputs/r8a78000-ironhide-npu.dtb" "$d/" \
+    cp "$inputs/Image-autosd" "$inputs/r8a78000-ironhide-uio-autosd.dtb" "$inputs/r8a78000-ironhide-npu-cacr.dtb" "$d/" \
         || die "STAGE_BOOT_FAIL reason=input_copy_failed"
-    # demo and dev boot a derived tree: the vendor NPU tree plus the relocated
-    # CR52 carveout. Derive it here rather than by hand, because the staged
+    # demo and dev boot a derived tree from this partition: the vendor cacr tree
+    # plus the three rpmsg windows cr52_1 needs (yocto boots a copy of it from
+    # yocto-boot). Derive it here rather than by hand, because the staged
     # default role is dev and a board whose role has no device tree on the
     # partition does not boot at all. make-demo-dtb.sh refuses to derive twice
     # and never writes into <inputs>, so the vendor blob stays untouched.
-    bash "$X5H/uboot/make-demo-dtb.sh" "$inputs/r8a78000-ironhide-npu.dtb" \
+    bash "$X5H/uboot/make-demo-dtb.sh" "$inputs/r8a78000-ironhide-npu-cacr.dtb" \
         "$d/r8a78000-ironhide-demo.dtb" || die "STAGE_BOOT_FAIL reason=demo_dtb_derive_failed"
     bash "$X5H/uboot/render-env.sh" "$vars" > "$d/x5h-env.txt" || die "STAGE_BOOT_FAIL reason=render_env_failed"
     # dev, not demo: a freshly staged board should come up quiet, with the

@@ -8,12 +8,16 @@ fail() { echo "TEST_FAIL $name reason=$1"; exit 1; }
 [ -f "$p" ] || fail script_missing
 [ -f "$mf" ] || fail manifest_missing
 d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
-v1="$here/../boards/x5h1.vars"; v2="$here/../boards/x5h2.vars"
+v1="$here/../boards/x5h1.vars"
+# A board with Yocto, so the HAS_YOCTO exemption stays covered whatever the
+# real boards carry today.
+v2="$d/x5h2-with-yocto.vars"
+printf 'BOARD_IP=192.168.0.21\nBOARD_HOSTNAME=autosd-x5h-2\nHAS_YOCTO=1\n' > "$v2"
 
 # Every manifest fixture must clear the completeness floor (kernel, cmdline,
 # env.md5, one boot.*, one unit.*) or parity refuses it before diffing.
-base1='boot.Image\t1111aaaa\nboot.x5h-env.txt\taaaa\ncmdline\tpd_ignore_unused root=X\nenv.md5\te0e0e0e0\nfile./etc/x5h/board.conf\t1111\nfs.yocto-root\tnone\nhostname\tautosd-x5h\nkernel\t6.1.102-autosd\npart.1.2\tyocto-root:8G:...5e12\nunit.x5h-role.service\tenabled\n'
-base2='boot.Image\t1111aaaa\nboot.x5h-env.txt\tbbbb\ncmdline\tpd_ignore_unused root=X\nenv.md5\te0e0e0e0\nfile./etc/x5h/board.conf\t2222\nfs.yocto-root\text4\nhostname\tautosd-x5h-2\nkernel\t6.1.102-autosd\npart.1.2\tyocto-root:8G:...5e12\nunit.x5h-role.service\tenabled\n'
+base1='boot.Image\t1111aaaa\nboot.x5h-env.txt\taaaa\ncmdline\tpd_ignore_unused root=X\nenv.md5\te0e0e0e0\nfile./etc/x5h/board.conf\t1111\nfs.yocto-root\tnone\nhostname\tautosd-x5h\nkernel\t6.1.102-autosd\npart.yocto-root\t...5e12:ext4\nunit.x5h-role.service\tenabled\n'
+base2='boot.Image\t1111aaaa\nboot.x5h-env.txt\tbbbb\ncmdline\tpd_ignore_unused root=X\nenv.md5\te0e0e0e0\nfile./etc/x5h/board.conf\t2222\nfs.yocto-root\text4\nhostname\tautosd-x5h-2\nkernel\t6.1.102-autosd\npart.yocto-root\t...5e12:ext4\nunit.x5h-role.service\tenabled\n'
 printf "$base1" > "$d/m1"
 printf "$base2" > "$d/m2"
 
@@ -167,5 +171,17 @@ printf '%s\n' "$out" | grep -q 'unit.sshd.service' || fail "sshd_unit_diff: $out
 # properties of the collector, so assert them there.
 grep -q '/etc/ssh/authorized_keys.d' "$mf" || fail manifest_stopped_collecting_authkeys
 grep -q "list-unit-files.*'sshd\*'" "$mf" || fail manifest_missing_sshd_unit_pattern
+
+# --- single-LU layout: partitions keyed by label, sizes not compared -------
+printf 'BOARD_IP=192.168.0.97\nBOARD_HOSTNAME=autosd-x5h-5\nHAS_YOCTO=0\n' > "$d/v1b"
+printf "${base1}size.npu-work\t23.0 GiB\n" > "$d/s1"; printf "${base1}size.npu-work\t76.4 GiB\n" > "$d/s2"
+out=$(bash "$p" "$d/s1" "$v1" "$d/s2" "$d/v1b")
+printf '%s\n' "$out" | grep -qx BOARD_PARITY_PASS || fail "size_should_be_ignored: $out"
+printf "${base1}part.x5h-root\t...5e02:ext4\n" > "$d/u1"; printf "${base1}part.x5h-root\t...5e99:ext4\n" > "$d/u2"
+out=$(bash "$p" "$d/u1" "$v1" "$d/u2" "$d/v1b")
+printf '%s\n' "$out" | grep -q 'BOARD_PARITY_FAIL reason=residual_diff' || fail "partuuid_must_be_compared: $out"
+grep -q 'c0a90000' "$mf" || fail manifest_not_scoped_to_ufs1
+grep -q '0:0:0:\[12\]' "$mf" && fail manifest_still_lun_numbered
+grep -q 'emit "part\.$label"' "$mf" || fail manifest_part_not_keyed_by_label
 
 echo "TEST_PASS $name"

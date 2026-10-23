@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # demo-role-smoke.sh -- gate D1a: the board booted the derived device tree,
-# with the NPU tree intact and the CR52 carveout relocated to 0x5da00000.
+# the vendor cacr tree plus the three rpmsg windows below the stock CR52
+# carveouts (uboot/make-demo-dtb.sh).
 # demo and dev boot that same tree, so either role satisfies this gate and
 # the marker reports which one it found. Read-only: it writes nothing to
 # sysfs and never starts the remoteproc. Run it after every such boot.
 #
 # Markers on stdout:
-#   DEMO_ROLE_PASS role=<demo|dev> carveout=0x5da00000 vdev=0x5dc00000 remoteproc=<state>
+#   DEMO_ROLE_PASS role=<demo|dev> carveout=0x96650000 vdev=0x96400000 remoteproc=<state>
 #   DEMO_ROLE_FAIL reason=<wrong_role|carveout_not_reserved|carveout_node_missing|
 #                          carveout_phandle|<name>_not_reserved|<name>_node_missing|
 #                          <name>_phandle|<name>_not_linked|
@@ -27,13 +28,13 @@ RPROC_DIR=${RPROC_DIR:-/sys/class/remoteproc/remoteproc0}
 # boot journal still held all four lines. A booth board is exactly the
 # long-uptime case, so dmesg makes this check expire silently.
 DMESG_CMD=${DMESG_CMD:-"journalctl -k -b --no-pager"}
-BASE=5da00000
-# 2 MiB. The end address is derived from the base and the size rather than
-# written out, so moving BASE alone cannot leave a reservation check that no
-# board can ever satisfy.
-SIZE=200000
+# The vendor's own cr52_ram1, 0x50000. The end address is derived from the
+# base and the size rather than written out, so moving BASE alone cannot leave
+# a reservation check that no board can ever satisfy.
+BASE=96650000
+SIZE=50000
 END=$(printf '%x' $((0x$BASE + 0x$SIZE - 1)))
-VDEV_BASE=5dc00000
+VDEV_BASE=96400000
 # The four carveouts cr52_1 must list, in the order it must list them, as
 # make-demo-dtb.sh writes them: name base size. The three vdev names are what
 # rproc_alloc_vring() and rproc_add_virtio_dev() look the carveouts up by, so
@@ -43,23 +44,24 @@ VDEV_BASE=5dc00000
 # data-aborts in rpmsg_init_vdev. That was gate D1b on board 2, 2026-09-17,
 # and nothing in this gate reported it.
 #
-# No phandle is written here except cr52_ram1's. make-demo-dtb.sh allocates the
-# three vdev phandles above the highest one the vendor tree uses, so their
-# values are not fixed. What this gate checks instead is the linkage: each
-# node's own phandle must sit at that node's position in cr52_1's
-# memory-region list. That is the property the kernel actually depends on.
+# No phandle is written here except cr52_ram1's, the vendor's 0x10a.
+# make-demo-dtb.sh allocates the three vdev phandles above the highest one the
+# vendor tree uses, so their values are not fixed. What this gate checks
+# instead is the linkage: each node's own phandle must sit at that node's
+# position in cr52_1's memory-region list. That is the property the kernel
+# actually depends on.
 REGIONS="cr52_ram1 $BASE $SIZE
-vdev0vring0 5dc00000 3000
-vdev0vring1 5dc03000 3000
-vdev0buffer 5dc10000 100000"
+vdev0vring0 96400000 3000
+vdev0vring1 96403000 3000
+vdev0buffer 96410000 100000"
 fail() { echo "DEMO_ROLE_FAIL reason=$1"; exit 1; }
 hex32() { od -An -tx1 "$1" 2>/dev/null | tr -d ' \n'; }
 # Is [start,end] covered by some reserved range in /proc/iomem?
 #
 # Containment, not an exact base-end match. The kernel COALESCES adjacent
-# reserved regions into one line, and three of these four windows are
-# contiguous, so on a correct board they render as a single
-# "5da00000-5dc05fff : reserved" and an exact match finds none of them.
+# reserved regions into one line. The two vrings are contiguous, and so are
+# the cacr tree's cr52_ram0, cr52_ram1, cr52_ram2 and cr52_ca720_share
+# (0x96600000 to 0x9e600000), so an exact match can find none of them.
 # Board-observed on board 2, 2026-09-18: the exact-match version of this check
 # failed with carveout_not_reserved on a boot whose carveouts were all correct.
 reserved_covers() {
@@ -104,7 +106,7 @@ while read -r rname rbase rsize; do
     [ "$rph" = "${mr:$((i * 8)):8}" ] || fail "${rname}_not_linked"
     i=$((i + 1))
 done <<<"$REGIONS"
-for r in 1400000000 1c00000000 64000000 8e400000; do
+for r in 5da00000 9e600000 1400000000 1c00000000; do
     [ -d "$DT_ROOT/reserved-memory/linux,npu_region@$r" ] || fail "npu_region_${r}_missing"
 done
 [ -e "$UIO_DIR/uio2" ] || fail uio2_missing
