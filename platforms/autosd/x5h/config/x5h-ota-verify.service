@@ -1,0 +1,15 @@
+[Unit]
+Description=X5H OTA: judge the update after a boot (x5h-ota verify)
+ConditionKernelCommandLine=x5h.role=demo
+ConditionPathExists=/var/lib/x5h-ota/pending
+# x5h-demo-up.sh starts x5h-si-link and score-lm itself, so order after it.
+After=x5h-demo.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/x5h-ota verify
+# Two judgments of 120 s, two launch manager stops of 15 s, and margin.
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target
