@@ -1,9 +1,10 @@
 # systemd presets for the Open AD Kit X5H image (issue #120 M7).
 # Installed by aib/x5h-rootfs.aib.yml to /etc/systemd/system-preset/.
 #
-# This file enables eight units: SSH daemon, role banner, container store
+# This file enables nine units: SSH daemon, role banner, container store
 # mount, NPU work partition mount, NPU service, CR52 remoteproc, the
-# CES 2027 demo stack bring-up, and chronyd (time from rog-amd).
+# CES 2027 demo stack bring-up, the OTA check after a boot
+# (x5h-ota-verify.service), and chronyd (time from rog-amd).
 #
 # THE QUADLET UNITS ARE NOT LISTED, and adding them would be a no-op that
 # reads like a decision. Quadlet generates their .service units at boot and
@@ -55,4 +56,5 @@ enable var-opt-npu.mount
 enable x5h-npu.service
 enable cr52-remoteproc.service
 enable x5h-demo.service
+enable x5h-ota-verify.service
 enable chronyd.service

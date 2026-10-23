@@ -325,19 +325,11 @@ and logs `NPU_READY uio=<n> cmem=<n>`. Until that marker is in the journal
 there is no contract to hand anyone, and `npu-contract-smoke.sh` refuses to run
 with `NPU_CONTRACT_FAIL reason=npu_not_ready`.
 
-The image is built on the board, from the vendor `ort-rootfs` tree that lives
-on `npu-work` and never in this repository:
-
-```sh
-podman build -t localhost/x5h-ort-rootfs:latest \
-  -f /usr/sbin/ort-rootfs.containerfile \
-  --ignorefile /usr/sbin/ort-rootfs.containerignore /opt/npu/ort-rootfs
-```
-
-The ignore file is not optional: `ort-rootfs/npu` is the bind target of
-`/opt/npu`, which contains `ort-rootfs` itself, so a build without it recurses
-forever. `tar | podman import` is not an alternative, because the AutoSD image
-ships no `tar`.
+The image is the VisionPilot image itself, `localhost/x5h-visionpilot:latest`, so
+the contract is proved on the ONNX Runtime library that VisionPilot runs on. The
+program is the vendor C++ `infer` from the EP v2.0.1 package on `npu-work`
+(`/opt/npu/ort-2.0.1`: `infer`, `lib/`, `binary/arc_prog_*`). Neither lives in
+this repository.
 
 The run is the contract proper:
 
@@ -346,33 +338,43 @@ podman run --rm --privileged \
   --device /dev/uio2:/dev/npuc0 --device /dev/uio3:/dev/npuc1 \
   --device /dev/cmem0 --device /dev/cmem_other0 --device /dev/cmem_other1 \
   --device /dev/cmem_other2 --device /dev/cmem_other3 \
-  -v /opt/npu:/npu -w /npu localhost/x5h-ort-rootfs:latest \
-  /usr/local/bin/python3 /npu/renesas_ep_eval_latency.py \
-    --artifacts /npu/<artifact-set> --runs 20
+  -v /opt/npu:/npu \
+  -v /opt/npu/perf/merged:/home/youtalk/src/openadkit/x5h-work/npu/merged:ro \
+  --entrypoint /npu/ort-2.0.1/infer localhost/x5h-visionpilot:latest \
+  --artifacts /npu/<artifact-set> --binary /npu/ort-2.0.1/binary --runs 20
 ```
 
-Three details in that command are load-bearing:
+Four details in that command are load-bearing:
 
 - **The `uioN:npucN` destinations must be spelled out.** `npuc0` and `npuc1`
   are udev symlinks, so `--device /dev/npuc0` resolves on the host and podman
   creates the node inside the container under its resolved name, `uio2`. The
   backend then calls `open("/dev/npuc1")` literally and fails. Naming the
   destination is what makes the container see the names the runtime expects.
-- **`/opt/npu` is mounted at `/npu`, not somewhere convenient.** Artifact sets
-  are addressed relative to it, and compiled artifacts also record absolute
-  compile-host paths, so the mount point is part of the contract rather than a
-  preference.
+- **`/opt/npu` is mounted at `/npu`, and the compile-host path is mapped too.**
+  Artifact sets and the EP package are addressed under `/npu`. A compiled set's
+  `manifest.json` records the absolute path it was compiled at, and the second
+  mount makes that path resolve.
+- **`--binary` names the directory that holds `arc_prog_npus`.** The EP appends
+  `/arc_prog_npus` itself. Given `binary/arc_prog_npus`, it looks one level too
+  deep and loads no program.
 - **`cmem_other0` through `cmem_other3`, all four.** Their count comes from the
   `/cmem` node's phandle list, so a missing one is a device-tree fault and not
   something the container can work around. `x5h-npu.service` already refuses to
   reach `NPU_READY` unless four exist.
 
-Grade the run by output, never by exit status: `renesas_ep_eval_latency.py`
-catches every exception and still exits 0 (see "Three traps in step 4"). The
-smoke script prints `NPU_CONTRACT_PASS avg_ms=<v> runs=<n> image=<ref>` only
-when the session listed `RenesasExecutionProvider` and a latency figure could
-be parsed, and otherwise `NPU_CONTRACT_FAIL reason=<wrong_role|npu_not_ready|
-no_image|no_artifacts|no_renesas_ep|no_latency|bad_args>`.
+`infer` feeds random inputs, so a pass proves that the NPU runs the set, not
+that the set is accurate. The offline `fm.nnx` grade covers accuracy. `infer`
+exits non-zero on an ONNX Runtime exception, and the smoke script also needs
+its latency line. It prints `NPU_CONTRACT_PASS avg_ms=<v> runs=<n> image=<ref>`
+only when both hold, and otherwise `NPU_CONTRACT_FAIL reason=<wrong_role|
+npu_not_ready|no_artifacts|no_infer|no_image|infer_rc_<n>|no_latency|bad_args>`.
+
+The EP, its ARC set, the vendor `host_app` binaries and the device tree move
+together. EP v2.0.1 carries the cacr memory map, which only the derived cacr
+tree provides (README.md, "The four CR52 carveouts"). An older EP or `host_app`
+on that tree, or EP v2.0.1 on an older tree, addresses memory that the tree
+gives to something else.
 
 **Any role switch is a full SoC reset, and it reloads the CR52.**
 `x5h-role set <role> --reboot` is not a userspace handover: a warm reboot on
@@ -568,8 +570,10 @@ AutoSD is entered from the U-Boot prompt and nothing is persisted.
     signature. Confirmed from the other side too — an `Image-autosd` boot logs
     `avc: denied` against `unlabeled_t` with `permissive=1`.
 
-The kernel and the device tree may live on different logical units; the NPU device
-tree `r8a78000-ironhide-npu.dtb` is on `x5h-boot` alongside `Image-autosd`. Address
+The kernel and the device tree may live on different logical units; the vendor NPU
+tree was `r8a78000-ironhide-npu.dtb` on `x5h-boot`, alongside `Image-autosd`. Since the
+cacr switch, `x5h-boot` carries the vendor `r8a78000-ironhide-npu-cacr.dtb` and the
+derived `r8a78000-ironhide-demo.dtb` instead. Address
 logical units by partlabel, never by device letter — the letters move between boots.
 
 ### The safety harness, and what each layer does not catch
@@ -679,7 +683,7 @@ container under its resolved name, so the backend's literal `open("/dev/npuc1")`
 with `driver_open failed: -1`. Name the destination explicitly:
 
 ```sh
-podman run --rm --privileged   --device /dev/uio2:/dev/npuc0 --device /dev/uio3:/dev/npuc1   -v /opt/npu:/npu -w /npu <image>   /usr/local/bin/python3 /npu/renesas_ep_eval_latency.py --artifacts <A> --runs <N>
+podman run --rm --privileged   --device /dev/uio2:/dev/npuc0 --device /dev/uio3:/dev/npuc1   -v /opt/npu:/npu --entrypoint /npu/ort-2.0.1/infer <image>   --artifacts <A> --binary /npu/ort-2.0.1/binary --runs <N>
 ```
 
 Container storage is btrfs on its own partition, so the `EXT4_FS_SECURITY` gap

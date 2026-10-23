@@ -89,7 +89,7 @@ chmod_pairs=$(printf '%s\n' "$chmod_block" | awk '
 while IFS=$'\t' read -r src dest; do
     case "$src" in ../scripts/*) ;; *) continue ;; esac
     case "$dest" in /usr/sbin/*) ;; *) continue ;; esac
-    [ -x "$aibdir/$src" ] || continue          # data files (ort-rootfs.container*)
+    [ -x "$aibdir/$src" ] || continue          # data files, not programs
     mode=$(printf '%s\n' "$chmod_pairs" | awk -F'\t' -v d="$dest" '$1 == d { print $2 }')
     [ -n "$mode" ] || fail "executable_not_chmodded=$dest"
     [ "$mode" = 0755 ] || fail "wrong_mode=$dest mode=$mode"
@@ -102,5 +102,11 @@ while IFS=$'\t' read -r cpath _; do
         || fail "chmod_path_not_installed=$cpath"
 done <<< "$chmod_pairs"
 
+
+# --- the OTA hook and its boot check ship in the image ---------------------
+grep -A1 -F "source_path: ../scripts/x5h-ota.sh" "$aib" | grep -qF "path: /usr/sbin/x5h-ota" || fail ota_hook_not_installed
+grep -A1 -F "source_path: ../config/x5h-ota-verify.service" "$aib" \
+    | grep -qF "path: /etc/systemd/system/x5h-ota-verify.service" || fail ota_unit_not_installed
+grep -qx 'enable x5h-ota-verify.service' "$here/../config/80-x5h.preset" || fail ota_unit_not_enabled
 
 echo "TEST_PASS $name"
