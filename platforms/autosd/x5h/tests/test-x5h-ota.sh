@@ -107,6 +107,15 @@ if [ -f "$T/flip" ]; then
 fi
 exit 0
 EOF2
+# cp: with $T/cpfail present, a copy onto the firmware writes 10 bytes and fails once.
+cat > "$tmp/fakes/cp" <<'EOF2'
+#!/bin/sh
+for a; do d=$a; done
+if [ -f "$T/cpfail" ] && [ "$d" = "$X5H_OTA_FIRMWARE" ]; then
+    rm -f "$T/cpfail"; head -c 10 "$1" > "$d"; exit 1
+fi
+exec /bin/cp "$@"
+EOF2
 chmod +x "$tmp/fakes/"*
 
 # ---- fixtures ----
@@ -117,6 +126,8 @@ vec() { for _ in 1 2 3 4 5 6 7 8; do printf '\030\360\237\345'; done; }
 head -c 10000 /dev/zero > "$tmp/fix/zero.bin"
 { printf '\177ELF'; head -c 100 /dev/zero; } > "$tmp/fix/good.elf"
 { printf 'MZ\220\000'; head -c 100 /dev/zero; } > "$tmp/fix/mz.elf"
+{ vec; head -c 11968 /dev/zero | tr '\000' '\125'; } > "$tmp/fix/p1.bin"
+{ printf '\177ELF'; head -c 200 /dev/zero | tr '\000' '\001'; } > "$tmp/fix/elf1.elf"
 
 reset_case() {
     T="$tmp/case"; export T
@@ -127,7 +138,7 @@ reset_case() {
 }
 run() {
     out=$(PATH="$T/bin:$PATH" T="$T" X5H_OTA_STATE="$T/state" X5H_OTA_CONF="$T/slot.conf" \
-        X5H_OTA_DEVICES="$T/dev0 $T/dev1" X5H_OTA_FIRMWARE="$T/fw/actuation_x5h.elf" \
+        X5H_OTA_DEVICES="${DEVS:-$T/dev0 $T/dev1}" X5H_OTA_FIRMWARE="$T/fw/actuation_x5h.elf" \
         X5H_OTA_LOCK="$T/lock" X5H_OTA_TIMEOUT="${TIMEOUT:-0}" X5H_OTA_DIRECT= \
         sh "$hook" "$@" 2>&1); rc=$?
 }
@@ -304,5 +315,148 @@ run; bad usage usage usage_none
 run bogus; bad usage usage usage_bogus
 run install camera "$VD"; bad install bad_component bad_component
 run install visionpilot; bad install usage usage_argc
+run init; bad init usage init_argc
+run activate now; bad activate usage activate_argc
+
+# ---- init ----
+# base: P0 at SLOT_SKIP on dev1 (dev0 stays zeros), the baseline ELF as firmware.
+base() {
+    cp "$T/fix/good.bin" "$T/p0.bin"; cp "$T/fix/good.elf" "$T/fw/actuation_x5h.elf"
+    dd if="$T/p0.bin" of="$T/dev1" bs=4096 seek=4 conv=notrunc 2>/dev/null
+}
+ext() { dd if="$T/$1" bs=4096 skip=4 count=8 2>/dev/null; }
+reset_case; base
+run init "$T/p0.bin"
+has 'X5H_OTA_PASS init' init_ok
+for k in version=baseline state=ok "sha256=$(sum "$T/p0.bin")" bytes=10000 "elf_sha256=$(sum "$T/fix/good.elf")"; do
+    grep -qx "$k" "$(ST cr52/installed.env)" || fail "init_env $k"
+done
+run status
+has 'X5H_OTA_STATUS component=cr52 version=baseline state=ok slot=match' init_status
+cp "$T/fix/elf1.elf" "$T/fw/actuation_x5h.elf"; run status
+has 'X5H_OTA_STATUS component=cr52 version=baseline state=ok slot=mismatch' status_fw_mismatch
+cp "$T/fix/good.elf" "$T/fw/actuation_x5h.elf"; head -c 49152 /dev/zero > "$T/dev1"; run status
+has 'X5H_OTA_STATUS component=cr52 version=baseline state=ok slot=mismatch' status_slot_mismatch
+
+reset_case; base; cp "$T/fix/p1.bin" "$T/p1.bin"
+run init "$T/p1.bin"; bad init slot_not_found init_none
+reset_case; base; dd if="$T/p0.bin" of="$T/dev0" bs=4096 seek=4 conv=notrunc 2>/dev/null
+run init "$T/p0.bin"; bad init slot_ambiguous init_two
+reset_case; base; ln -s "$T/dev1" "$T/alias1"
+DEVS="$T/dev0 $T/dev1 $T/alias1" run init "$T/p0.bin"; has 'X5H_OTA_PASS init' init_alias
+reset_case; base; rm "$T/fw/actuation_x5h.elf"
+run init "$T/p0.bin"; bad init no_firmware init_nofw
+[ ! -e "$(ST cr52/installed.env)" ] || fail init_nofw_env
+
+# ---- activate ----
+reset_case
+run activate; bad activate nothing_staged act_none
+
+# cr52up <case>: init with P0, then stage P1 and ELF1 as v1; keep the old extent.
+cr52up() {
+    base; run init "$T/p0.bin"; has 'X5H_OTA_PASS init' "$1_init"
+    mkcr52 K "$T/fix/p1.bin" "$T/fix/elf1.elf" v1; ref "$CD" K
+    run install cr52 "$CD"; has 'X5H_OTA_PASS install' "$1_install"
+    ext dev1 > "$T/old.ext"
+}
+# vpup <case>: :latest holds B, :previous holds C with no other tag, then stage A.
+vpup() {
+    mkimg B arm64 x5h.ota.component=visionpilot org.opencontainers.image.version=v0
+    mkimg C arm64 x5h.ota.component=visionpilot org.opencontainers.image.version=old
+    echo B > "$T/podman/tags/localhost_x5h-visionpilot_latest"
+    echo C > "$T/podman/tags/localhost_x5h-visionpilot_previous"
+    vpimg; ref "$VD" A
+    run install visionpilot "$VD"; has 'X5H_OTA_PASS install' "$1_install"
+}
+tagof() { cat "$T/podman/tags/localhost_x5h-visionpilot_$1" 2>/dev/null; }
+# undone <case>: the slot, the firmware and pending are as before the activate.
+undone() {
+    hasnt X5H_OTA_REBOOT_REQUIRED "$1_reboot"
+    ext dev1 | cmp -s - "$T/old.ext" || fail "$1_slot"
+    cmp -s "$T/fix/good.elf" "$T/fw/actuation_x5h.elf" || fail "$1_fw"
+    [ ! -e "$(ST pending)" ] || fail "$1_pending"
+    [ ! -e "$(ST last)" ] || fail "$1_last"
+    [ -f "$(ST cr52/staged.env)" ] && [ -f "$(ST cr52/staged.bin)" ] || fail "$1_staged"
+}
+
+reset_case; cr52up act_cr52
+run activate
+has X5H_OTA_REBOOT_REQUIRED act_cr52_reboot; has 'X5H_OTA_PASS activate' act_cr52
+{ cat "$T/fix/p1.bin"; head -c $((32768 - 12000)) /dev/zero | tr '\000' '\377'; } > "$T/want.ext"
+ext dev1 | cmp -s - "$T/want.ext" || fail act_cr52_slot
+cmp -s "$T/dev0" <(head -c 49152 /dev/zero) || fail act_cr52_dev0
+cmp -s <(head -c 16384 "$T/dev1") <(head -c 16384 /dev/zero) || fail act_cr52_head
+cmp -s "$T/fix/elf1.elf" "$T/fw/actuation_x5h.elf" || fail act_cr52_fw
+cmp -s "$T/old.ext" "$(ST cr52/previous.bin)" || fail act_cr52_prevbin
+cmp -s "$T/fix/good.elf" "$(ST cr52/previous.elf)" || fail act_cr52_prevelf
+grep -qx version=baseline "$(ST cr52/previous.env)" || fail act_cr52_prevenv
+[ "$(cat "$(ST pending)")" = 'cr52 update' ] || fail act_cr52_pending
+[ "$(cat "$(ST last)")" = cr52 ] || fail act_cr52_last
+[ ! -e "$(ST cr52/staged.env)" ] && [ ! -e "$(ST cr52/staged.bin)" ] || fail act_cr52_staged
+run status
+has 'X5H_OTA_STATUS component=cr52 version=v1 state=verifying slot=match' act_cr52_status
+
+reset_case; cr52up act_flip; echo 16384 > "$T/flip"
+run activate; bad activate write_mismatch act_flip
+[ ! -e "$T/flip" ] || fail act_flip_unused
+undone act_flip
+run status
+has 'X5H_OTA_STATUS component=cr52 version=baseline state=staged slot=match' act_flip_status
+
+reset_case; base; mkcr52 K "$T/fix/p1.bin" "$T/fix/elf1.elf" v1; ref "$CD" K
+run install cr52 "$CD"; ext dev1 > "$T/old.ext"
+run activate; bad activate slot_not_found act_noinit
+undone act_noinit
+
+# The conf shrank after the install: P1 (12000 bytes) no longer fits 2 sectors.
+reset_case; cr52up act_big; printf 'SLOT_SKIP=4\nSLOT_SECTORS=2\n' > "$T/slot.conf"
+run activate; bad activate too_large act_too_large
+undone act_too_large
+
+reset_case; cr52up act_nofw; rm "$T/fw/actuation_x5h.elf"
+run activate; bad activate no_firmware act_nofw
+ext dev1 | cmp -s - "$T/old.ext" || fail act_nofw_slot
+[ ! -e "$(ST pending)" ] || fail act_nofw_pending
+
+reset_case; cr52up act_fw; : > "$T/cpfail"
+run activate; bad activate firmware_write act_fw
+[ ! -e "$T/cpfail" ] || fail act_fw_unused
+undone act_fw
+
+if [ "$(id -u)" != 0 ]; then
+    reset_case; cr52up act_sw; chmod a-w "$T/state/cr52"
+    run activate; bad activate state_write act_state_write
+    chmod u+w "$T/state/cr52"
+    undone act_state_write
+fi
+
+reset_case; vpup act_vp_reboot
+LM_STATE=inactive run activate
+has X5H_OTA_REBOOT_REQUIRED act_vp_reboot_marker; has 'X5H_OTA_PASS activate' act_vp_reboot
+[ "$(tagof latest)" = A ] && [ "$(tagof previous)" = B ] && [ -z "$(tagof staged)" ] || fail act_vp_tags
+logged 'rmi C' act_vp_rmi
+[ ! -d "$T/podman/images/C" ] || fail act_vp_c_left
+[ "$(cat "$(ST pending)")" = 'visionpilot update' ] || fail act_vp_pending
+[ "$(cat "$(ST last)")" = visionpilot ] || fail act_vp_last
+grep -qx image=B "$(ST visionpilot/previous.env)" || fail act_vp_prev
+for k in version=v1 image=A state=ok; do
+    grep -qx "$k" "$(ST visionpilot/installed.env)" || fail "act_vp_env $k"
+done
+[ ! -e "$(ST visionpilot/staged.env)" ] || fail act_vp_staged
+
+reset_case; vpup act_vp_child
+RMI_FAIL=1 run activate
+has 'X5H_OTA_PASS activate' act_vp_child
+[ -d "$T/podman/images/C" ] || fail act_vp_child_rmi
+
+reset_case; vpup act_both; cr52up act_both; echo 16384 > "$T/flip"
+run activate; bad activate write_mismatch act_both_flip
+[ "$(tagof latest)" = B ] && [ "$(tagof previous)" = C ] && [ "$(tagof staged)" = A ] || fail act_both_tags
+[ -f "$(ST visionpilot/staged.env)" ] || fail act_both_vp_staged
+undone act_both
+
+reset_case; mkdir -p "$T/state"; echo 'cr52 update' > "$T/state/pending"
+run activate; bad activate verify_pending act_pending
+run init "$T/p0.bin"; bad init verify_pending init_pending
 
 echo "TEST_PASS $name"

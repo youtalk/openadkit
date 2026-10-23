@@ -1,9 +1,10 @@
 #!/bin/sh
 # x5h-ota: OTA hook for the X5H board. An update agent calls it to stage,
 # apply and judge two components: the VisionPilot image and the CR52 slot.
+#   x5h-ota init <payload-file>
 #   x5h-ota install <visionpilot|cr52> <source>
-#   x5h-ota status | rollback
-# (init, activate and verify are added by later changes.)
+#   x5h-ota activate | status | rollback
+# (verify is added by a later change.)
 # State and conf files are read with sed, never sourced: a version string
 # comes from an artifact.
 set -u
@@ -12,6 +13,7 @@ S=${X5H_OTA_STATE:-/var/lib/x5h-ota}
 CONF=${X5H_OTA_CONF:-/etc/x5h-ota/cr52-slot.conf}
 FW=${X5H_OTA_FIRMWARE:-/lib/firmware/actuation_x5h.elf}
 LOCK=${X5H_OTA_LOCK:-/run/x5h-ota.lock}
+DIRECT=${X5H_OTA_DIRECT-iflag=direct}
 VPIMG=localhost/x5h-visionpilot
 VPREPO=ghcr.io/youtalk/x5h-visionpilot
 CRREPO=ghcr.io/youtalk/x5h-cr52-si
@@ -32,6 +34,13 @@ valid_version() {
 }
 
 tagid() { podman image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
+
+# retag <tag> <id>: point $VPIMG:<tag> at <id>, or remove the tag for an empty
+# id. Returns 0 only if the tag then holds <id>.
+retag() {
+    if [ -n "$2" ]; then podman tag "$2" "$VPIMG:$1"; else podman rmi "$VPIMG:$1"; fi > /dev/null 2>&1
+    [ "$(tagid "$VPIMG:$1")" = "$2" ]
+}
 
 # drop_image <id>: remove an image that holds no name. Never fails.
 drop_image() {
@@ -64,9 +73,7 @@ fetch() {
     moved=0
     for t in latest:"$o1" previous:"$o2" staged:"$o3"; do
         [ "$(tagid "$VPIMG:${t%%:*}")" = "${t#*:}" ] && continue
-        moved=1
-        if [ -n "${t#*:}" ]; then podman tag "${t#*:}" "$VPIMG:${t%%:*}"
-        else podman rmi "$VPIMG:${t%%:*}" > /dev/null 2>&1; fi
+        moved=1; retag "${t%%:*}" "${t#*:}"
     done
     if [ $moved = 1 ]; then drop_image "$id"; return 2; fi
     printf '%s\n' "$id"
@@ -152,7 +159,7 @@ discard_staged() {
 }
 
 # ponytail: only staged components roll back here; the activated-version
-# restore is added with `activate`.
+# restore is a later change.
 cmd_rollback() {
     n=0
     for c in cr52 visionpilot; do discard_staged "$c" && n=1; done
@@ -160,9 +167,152 @@ cmd_rollback() {
     echo 'X5H_OTA_PASS rollback'
 }
 
+# devices: each whole UFS device once. Two names of one device are one device.
+devices() {
+    seen=
+    for d in ${X5H_OTA_DEVICES:-/dev/disk/by-path/platform-*ufs*}; do
+        case ${d##*/} in *-part*) continue ;; esac
+        d=$(readlink -f "$d") && [ -e "$d" ] || continue
+        case " $seen " in *" $d "*) continue ;; esac
+        seen="$seen $d"; printf '%s\n' "$d"
+    done
+}
+
+# slot_find <sha256> <bytes>: print the one device whose first <bytes> at
+# SLOT_SKIP have that hash. Returns 2 for none and 3 for more than one.
+slot_find() {
+    case $2 in '' | *[!0-9]*) return 2 ;; esac
+    n=0
+    for d in $(devices); do
+        got=$(dd if="$d" bs=4096 skip="$SLOT_SKIP" count=$((($2 + 4095) / 4096)) 2>/dev/null |
+            head -c "$2" | sha256sum)
+        [ "${got%% *}" = "$1" ] || continue
+        n=$((n + 1)); found=$d
+    done
+    [ "$n" -gt 0 ] || return 2
+    [ "$n" -eq 1 ] || return 3
+    printf '%s\n' "$found"
+}
+
+# slot_write <dev> <extent-file>: write, flush, and compare a direct read-back.
+# Call it in the main shell, never in $(...) or a pipeline: the power-cut
+# test kills the parent of blockdev.
+slot_write() {
+    dd if="$2" of="$1" bs=4096 seek="$SLOT_SKIP" conv=notrunc,fsync 2>/dev/null &&
+        blockdev --flushbufs "$1" &&
+        dd if="$1" bs=4096 skip="$SLOT_SKIP" count="$SLOT_SECTORS" $DIRECT 2>/dev/null | cmp -s - "$2"
+}
+
 # slot_check: slot=match|mismatch for an installed cr52.
-# ponytail: stub until `slot_find` exists; no installed.env exists before then.
-slot_check() { echo mismatch; }
+slot_check() {
+    e=$S/cr52/installed.env
+    if conf_load && [ -f "$FW" ] && [ "$(sum "$FW")" = "$(env_get "$e" elf_sha256)" ] &&
+        slot_find "$(env_get "$e" sha256)" "$(env_get "$e" bytes)" > /dev/null; then
+        echo match
+    else
+        echo mismatch
+    fi
+}
+
+cmd_init() {
+    conf_load || die init no_conf
+    [ -f "$FW" ] || die init no_firmware
+    [ -f "$1" ] && bytes=$(($(wc -c < "$1"))) &&
+        [ "$bytes" -gt 0 ] && [ "$bytes" -le $((SLOT_SECTORS * 4096)) ] || die init slot_not_found
+    h=$(sum "$1")
+    slot_find "$h" "$bytes" > /dev/null; r=$?
+    case $r in 0) ;; 3) die init slot_ambiguous ;; *) die init slot_not_found ;; esac
+    env_put "$S/cr52/installed.env" version=baseline state=ok "sha256=$h" \
+        "elf_sha256=$(sum "$FW")" "bytes=$bytes" || die init state_write
+    echo 'X5H_OTA_PASS init'
+}
+
+# start_kind <components>: how the update starts, reboot or restart.
+# ponytail: always reboot until the restart path exists (a later change).
+start_kind() { echo reboot; }
+
+# undo <reason>: put back what activate changed, keep the staged state, fail.
+# Called in the main shell, so slot_write keeps its parent.
+undo() {
+    r=$1
+    rm -f "$S/cr52/full.bin" "$S/cr52/installed.env.tmp" "$S/visionpilot/installed.env.tmp" "$S/last.tmp"
+    if [ "$wrote" = 1 ]; then slot_write "$dev" "$S/cr52/previous.bin" || r=rollback_failed; fi
+    if [ "$fwc" = 1 ]; then
+        cmp -s "$S/cr52/previous.elf" "$FW" || cp "$S/cr52/previous.elf" "$FW" || r=rollback_failed
+    fi
+    if [ "$vpb" = 1 ]; then
+        retag latest "$old_latest" || r=rollback_failed
+        retag previous "$old_prev" || r=rollback_failed
+    fi
+    rm -f "$S/pending"; sync
+    die activate "$r"
+}
+
+# activate: apply every staged component, visionpilot first in each phase.
+# A: save the previous version and add the pending line. B: apply. C: record.
+# A failure in A, B or the records of C runs undo. pending did not exist before
+# (verify_pending), so every pending line is ours.
+cmd_activate() {
+    list=
+    for c in visionpilot cr52; do [ ! -f "$S/$c/staged.env" ] || list="$list $c"; done
+    [ -n "$list" ] || die activate nothing_staged
+    e=$S/cr52/installed.env
+    case $list in *cr52*)
+        conf_load || die activate no_conf
+        [ -f "$FW" ] || die activate no_firmware
+        # Never write past the extent, even if the conf changed after the install.
+        [ "$(($(wc -c < "$S/cr52/staged.bin")))" -le $((SLOT_SECTORS * 4096)) ] || die activate too_large
+        dev=$(slot_find "$(env_get "$e" sha256)" "$(env_get "$e" bytes)"); r=$?
+        case $r in 0) ;; 3) die activate slot_ambiguous ;; *) die activate slot_not_found ;; esac ;;
+    esac
+    old_latest=$(tagid "$VPIMG:latest"); old_prev=$(tagid "$VPIMG:previous")
+    vpb=0 wrote=0 fwc=0
+    rm -f "$S/last"
+    for c in $list; do
+        if [ "$c" = visionpilot ]; then
+            v=$(env_get "$S/visionpilot/installed.env" version)
+            env_put "$S/visionpilot/previous.env" "version=${v:-none}" state=ok "image=$old_latest"
+        else
+            p=$S/cr52/previous
+            dd if="$dev" of="$p.bin" bs=4096 skip="$SLOT_SKIP" count="$SLOT_SECTORS" $DIRECT 2>/dev/null &&
+                [ "$(($(wc -c < "$p.bin")))" -eq $((SLOT_SECTORS * 4096)) ] &&
+                cp "$FW" "$p.elf" &&
+                env_put "$p.env" "version=$(env_get "$e" version)" state=ok "sha256=$(env_get "$e" sha256)" \
+                    "elf_sha256=$(sum "$p.elf")" "bytes=$(env_get "$e" bytes)"
+        fi && echo "$c update" >> "$S/pending" || undo state_write
+    done
+    sync
+    for c in $list; do
+        if [ "$c" = visionpilot ]; then
+            vpb=1
+            { [ -z "$old_latest" ] || podman tag "$old_latest" "$VPIMG:previous"; } &&
+                podman tag "$(env_get "$S/visionpilot/staged.env" image)" "$VPIMG:latest" || undo state_write
+        else
+            full=$S/cr52/full.bin
+            { dd if=/dev/zero bs=4096 count="$SLOT_SECTORS" 2>/dev/null | tr '\000' '\377' > "$full" &&
+                dd if="$S/cr52/staged.bin" of="$full" conv=notrunc 2>/dev/null; } || undo state_write
+            wrote=1
+            slot_write "$dev" "$full" || undo write_mismatch
+            fwc=1
+            cp "$S/cr52/staged.elf" "$FW" && sync || undo firmware_write
+        fi
+    done
+    # Write every record first, then move them in: a full disk fails before any move.
+    # ponytail: a failed rename after an earlier one leaves that installed.env new.
+    for c in $list; do
+        { cat "$S/$c/staged.env" && echo state=ok; } > "$S/$c/installed.env.tmp" || undo state_write
+    done
+    printf '%s\n' $list > "$S/last.tmp" || undo state_write
+    for c in $list; do mv "$S/$c/installed.env.tmp" "$S/$c/installed.env" || undo state_write; done
+    mv "$S/last.tmp" "$S/last" || undo state_write
+    sync
+    # Cleanup never fails the command.
+    rm -f "$S/cr52/full.bin"
+    for c in $list; do discard_staged "$c"; done
+    [ "$vpb" = 0 ] || [ -z "$old_prev" ] || drop_image "$old_prev"
+    if [ "$(start_kind "$list")" = reboot ]; then echo X5H_OTA_REBOOT_REQUIRED; fi
+    echo 'X5H_OTA_PASS activate'
+}
 
 cmd_status() {
     for c in cr52 visionpilot; do
@@ -183,7 +333,8 @@ cmd_status() {
 cmd=${1:-}
 case $cmd in
 install) [ $# -eq 3 ] || die install usage ;;
-status | rollback) [ $# -eq 1 ] || die "$cmd" usage ;;
+init) [ $# -eq 2 ] || die init usage ;;
+activate | status | rollback) [ $# -eq 1 ] || die "$cmd" usage ;;
 *) die usage usage ;;
 esac
 if [ "$cmd" = install ]; then
@@ -193,6 +344,8 @@ fi
 if [ "$cmd" != status ] && [ -e "$S/pending" ]; then die "$cmd" verify_pending; fi
 case $cmd in
 install) cmd_install "$2" "$3" ;;
+init) cmd_init "$2" ;;
+activate) cmd_activate ;;
 rollback) cmd_rollback ;;
 status) cmd_status ;;
 esac
