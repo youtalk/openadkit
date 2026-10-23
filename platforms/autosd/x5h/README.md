@@ -34,6 +34,7 @@ answered before board time.
 - [CR52 slot update](cr52-slot-update.md) — replace the realtime firmware
   by writing its boot slot from Linux, instead of the vendor serial-download
   tool and a trip to the board.
+- [OTA update hook](ota.md): the contract between an update agent and /usr/sbin/x5h-ota.
 - [Companion host](companion-host.md) — always-on bench gateway that keeps
   the board reachable remotely and scopes external developers' access.
   Executed and verified on hardware, 2026-08-10.
