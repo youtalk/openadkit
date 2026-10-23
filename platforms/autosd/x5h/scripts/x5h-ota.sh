@@ -3,8 +3,7 @@
 # apply and judge two components: the VisionPilot image and the CR52 slot.
 #   x5h-ota init <payload-file>
 #   x5h-ota install <visionpilot|cr52> <source>
-#   x5h-ota activate | status | rollback
-# (verify is added by a later change.)
+#   x5h-ota activate | status | rollback | verify
 # State and conf files are read with sed, never sourced: a version string
 # comes from an artifact.
 set -u
@@ -14,9 +13,16 @@ CONF=${X5H_OTA_CONF:-/etc/x5h-ota/cr52-slot.conf}
 FW=${X5H_OTA_FIRMWARE:-/lib/firmware/actuation_x5h.elf}
 LOCK=${X5H_OTA_LOCK:-/run/x5h-ota.lock}
 DIRECT=${X5H_OTA_DIRECT-iflag=direct}
+TIMEOUT=${X5H_OTA_TIMEOUT:-120}
+BOOTID=${X5H_OTA_BOOT_ID:-/proc/sys/kernel/random/boot_id}
 VPIMG=localhost/x5h-visionpilot
 VPREPO=ghcr.io/youtalk/x5h-visionpilot
 CRREPO=ghcr.io/youtalk/x5h-cr52-si
+# VisionPilot's backend ready string (merged_backend.cpp). grep -F finds it
+# anywhere in a journal line.
+READY='[MergedBackend] Ready'
+# 1 once an update failed its check in this call: the final marker is then FAIL.
+failed=0
 
 die() { printf 'X5H_OTA_FAIL %s reason=%s\n' "$1" "$2"; exit 1; }
 
@@ -158,13 +164,15 @@ discard_staged() {
     return 0
 }
 
-# ponytail: only staged components roll back here; the activated-version
-# restore is a later change.
+# rollback: discard staged components. With none staged, restore the
+# components of the last activate. Every rollback removes last, so a retried
+# rollback never restores the version before a good one.
 cmd_rollback() {
     n=0
     for c in cr52 visionpilot; do discard_staged "$c" && n=1; done
-    [ "$n" = 1 ] || die rollback nothing_to_roll_back
-    echo 'X5H_OTA_PASS rollback'
+    if [ "$n" = 1 ]; then rm -f "$S/last"; echo 'X5H_OTA_PASS rollback'; exit 0; fi
+    [ -s "$S/last" ] || die rollback nothing_to_roll_back
+    roll rollback $(cat "$S/last")
 }
 
 # devices: each whole UFS device once. Two names of one device are one device.
@@ -227,24 +235,164 @@ cmd_init() {
     echo 'X5H_OTA_PASS init'
 }
 
-# start_kind <components>: how the update starts, reboot or restart.
-# ponytail: always reboot until the restart path exists (a later change).
-start_kind() { echo reboot; }
+# start_kind <components>: reboot with cr52 in the list or with the launch
+# manager not active, otherwise restart.
+start_kind() {
+    case " $* " in *" cr52 "*) echo reboot; return ;; esac
+    if [ "$(systemctl is-active score-lm.service 2>/dev/null)" = active ]; then echo restart; else echo reboot; fi
+}
+
+# lm_restart: the booth reset sequence (spec section 10).
+lm_restart() {
+    systemctl stop score-lm.service
+    systemctl kill -s USR2 x5h-si-link.service
+    systemctl start score-lm.service
+}
+
+# comps: the components that pending names.
+comps() { sed -n 's/ .*//p' "$S/pending" 2>/dev/null; }
+
+# set_state <component> <state>: replace the state key of installed.env.
+set_state() {
+    se=$S/$1/installed.env
+    { sed '/^state=/d' "$se" 2>/dev/null; echo "state=$2"; } > "$se.tmp" && mv "$se.tmp" "$se"
+}
+
+# hb_rising: the last two hb seq numbers of this boot rise. It never reads
+# fault=: with no camera, fault=1 is normal.
+hb_rising() {
+    set -- $(journalctl -b -u x5h-si-link -o cat 2>/dev/null |
+        sed -n 's/.*hb seq=\([0-9][0-9]*\).*/\1/p' | tail -n 2)
+    [ $# -eq 2 ] && [ "$2" -gt "$1" ]
+}
+
+# check <since> <components>: one look at the pass conditions (spec section
+# 10). An empty <since> means this boot.
+check() {
+    cs=$1; shift
+    for cc; do
+        case $cc in
+        cr52) hb_rising && [ "$(slot_check)" = match ] ;;
+        visionpilot)
+            if [ -n "$cs" ]; then cw="-b --since @$cs"; else cw=-b; fi
+            journalctl $cw -t x5h-vp -o cat 2>/dev/null | grep -qF "$READY" &&
+                [ "$(tagid "$VPIMG:latest")" = "$(env_get "$S/visionpilot/installed.env" image)" ] ;;
+        *) false ;;
+        esac || return 1
+    done
+}
+
+# judge <since> <components>: one look, then up to X5H_OTA_TIMEOUT/2 more
+# looks 2 s apart, until all pass (0) or none is left (1). It counts looks, not
+# clock time: the board has no RTC, and chrony steps the clock.
+judge() {
+    jn=$((TIMEOUT / 2))
+    until check "$@"; do
+        [ "$jn" -gt 0 ] || return 1
+        jn=$((jn - 1)); sleep 2
+    done
+}
+
+# give_up <cmd> <components>: a rollback failed. Stop, a person takes over.
+give_up() {
+    gcmd=$1; shift
+    for gc; do set_state "$gc" rollback_failed; done
+    rm -f "$S/pending" "$S/pending.boot"; sync
+    die "$gcmd" rollback_failed
+}
+
+# restore <component>: put the previous version back and make previous.env
+# the installed one. Call it in the main shell (slot_write).
+# ponytail: the replaced visionpilot image stays untagged on the disk; its
+# container still runs here, so an rmi would fail. Prune it by hand if needed.
+restore() {
+    rp=$S/$1/previous.env
+    [ -f "$rp" ] || return 1
+    if [ "$1" = cr52 ]; then
+        conf_load || return 1
+        # A cut inside activate leaves the staged payload in the slot, and a cut
+        # after a restore write the previous one (writing it again is harmless).
+        for rf in installed staged previous; do
+            rd=$(slot_find "$(env_get "$S/cr52/$rf.env" sha256)" "$(env_get "$S/cr52/$rf.env" bytes)") && break
+        done || return 1
+        slot_write "$rd" "$S/cr52/previous.bin" || return 1
+        cmp -s "$S/cr52/previous.elf" "$FW" || cp "$S/cr52/previous.elf" "$FW" || return 1
+    else
+        retag latest "$(env_get "$rp" image)" || return 1
+    fi
+    cp "$rp" "$S/$1/installed.env.tmp" && mv "$S/$1/installed.env.tmp" "$S/$1/installed.env" && sync ||
+        return 1
+    discard_staged "$1"
+    return 0
+}
+
+# roll <cmd> <components>: restore each component, mark pending as a
+# rollback, and start the old versions. Every rollback removes last.
+roll() {
+    rcmd=$1; shift
+    rm -f "$S/last"
+    for rc_ in "$@"; do restore "$rc_" || give_up "$rcmd" "$@"; done
+    cat "$BOOTID" > "$S/pending.boot" &&
+        printf '%s rollback\n' "$@" > "$S/pending.tmp" && mv "$S/pending.tmp" "$S/pending" && sync ||
+        die "$rcmd" state_write
+    begin "$rcmd"
+}
+
+# begin <cmd>: start what pending names. A restart judges it now. A reboot
+# leaves the check to verify at the next boot.
+begin() {
+    if [ "$(start_kind $(comps))" = restart ]; then
+        since=$(date +%s); lm_restart; settle "$1" "$since" # settle never returns
+    fi
+    if [ "$failed" = 1 ]; then m="X5H_OTA_FAIL $1 reason=verify_failed"; else m="X5H_OTA_PASS $1"; fi
+    if [ "$1" = verify ]; then echo "$m"; systemctl reboot; exit 1; fi
+    echo X5H_OTA_REBOOT_REQUIRED; echo "$m"
+    exit "$failed"
+}
+
+# settle <cmd> <since>: judge pending, then record the result, roll back once
+# after a failed update, or stop after a failed rollback (spec section 10).
+settle() {
+    sc=$(comps)
+    case $(sed -n 1p "$S/pending") in *' rollback') sk=rollback ;; *) sk=update ;; esac
+    if judge "$2" $sc; then
+        if [ "$sk" = update ]; then st=ok; else st=rolled_back; fi
+        for c in $sc; do set_state "$c" "$st" || die "$1" state_write; done
+        rm -f "$S/pending" "$S/pending.boot"; sync
+        [ "$failed" = 0 ] || die "$1" verify_failed
+        echo "X5H_OTA_PASS $1"; exit 0
+    fi
+    [ "$sk" = update ] || give_up "$1" $sc
+    failed=1
+    roll "$1" $sc
+}
+
+# verify: judge pending at a boot after the one that wrote it. In that same
+# boot the old versions still pass every condition, so it changes nothing.
+cmd_verify() {
+    if [ ! -e "$S/pending" ]; then echo 'X5H_OTA_PASS verify'; exit 0; fi
+    if [ -s "$S/pending.boot" ] && [ "$(cat "$S/pending.boot")" = "$(cat "$BOOTID" 2>/dev/null)" ]; then
+        echo X5H_OTA_REBOOT_REQUIRED; die verify reboot_required
+    fi
+    settle verify ''
+}
 
 # undo <reason>: put back what activate changed, keep the staged state, fail.
-# Called in the main shell, so slot_write keeps its parent.
+# A failed put-back marks that component rollback_failed. Called in the main
+# shell, so slot_write keeps its parent.
 undo() {
-    r=$1
+    r=$1 bad=
     rm -f "$S/cr52/full.bin" "$S/cr52/installed.env.tmp" "$S/visionpilot/installed.env.tmp" "$S/last.tmp"
-    if [ "$wrote" = 1 ]; then slot_write "$dev" "$S/cr52/previous.bin" || r=rollback_failed; fi
+    if [ "$wrote" = 1 ]; then slot_write "$dev" "$S/cr52/previous.bin" || bad=cr52; fi
     if [ "$fwc" = 1 ]; then
-        cmp -s "$S/cr52/previous.elf" "$FW" || cp "$S/cr52/previous.elf" "$FW" || r=rollback_failed
+        cmp -s "$S/cr52/previous.elf" "$FW" || cp "$S/cr52/previous.elf" "$FW" || bad=cr52
     fi
     if [ "$vpb" = 1 ]; then
-        retag latest "$old_latest" || r=rollback_failed
-        retag previous "$old_prev" || r=rollback_failed
+        retag latest "$old_latest" || bad="$bad visionpilot"
+        retag previous "$old_prev" || bad="$bad visionpilot"
     fi
-    rm -f "$S/pending"; sync
+    for c in $bad; do set_state "$c" rollback_failed; r=rollback_failed; done
+    rm -f "$S/pending" "$S/pending.boot"; sync
     die activate "$r"
 }
 
@@ -268,6 +416,7 @@ cmd_activate() {
     old_latest=$(tagid "$VPIMG:latest"); old_prev=$(tagid "$VPIMG:previous")
     vpb=0 wrote=0 fwc=0
     rm -f "$S/last"
+    cat "$BOOTID" > "$S/pending.boot" || undo state_write
     for c in $list; do
         if [ "$c" = visionpilot ]; then
             v=$(env_get "$S/visionpilot/installed.env" version)
@@ -310,8 +459,7 @@ cmd_activate() {
     rm -f "$S/cr52/full.bin"
     for c in $list; do discard_staged "$c"; done
     [ "$vpb" = 0 ] || [ -z "$old_prev" ] || drop_image "$old_prev"
-    if [ "$(start_kind "$list")" = reboot ]; then echo X5H_OTA_REBOOT_REQUIRED; fi
-    echo 'X5H_OTA_PASS activate'
+    begin activate
 }
 
 cmd_status() {
@@ -322,7 +470,7 @@ cmd_status() {
         case $p in
         rollback) st=rolling_back ;;
         ?*) st=verifying ;;
-        *) [ ! -f "$S/$c/staged.env" ] || st=staged ;;
+        *) [ "$st" = rollback_failed ] || [ ! -f "$S/$c/staged.env" ] || st=staged ;;
         esac
         extra=
         [ "$c" != cr52 ] || [ ! -f "$e" ] || extra=" slot=$(slot_check)"
@@ -334,18 +482,22 @@ cmd=${1:-}
 case $cmd in
 install) [ $# -eq 3 ] || die install usage ;;
 init) [ $# -eq 2 ] || die init usage ;;
-activate | status | rollback) [ $# -eq 1 ] || die "$cmd" usage ;;
+activate | status | rollback | verify) [ $# -eq 1 ] || die "$cmd" usage ;;
 *) die usage usage ;;
 esac
 if [ "$cmd" = install ]; then
     case $2 in visionpilot | cr52) ;; *) die install bad_component ;; esac
 fi
 { exec 9> "$LOCK" && flock -w 600 9; } || die "$cmd" lock
-if [ "$cmd" != status ] && [ -e "$S/pending" ]; then die "$cmd" verify_pending; fi
+case $cmd in
+status | verify) ;;
+*) [ ! -e "$S/pending" ] || die "$cmd" verify_pending ;;
+esac
 case $cmd in
 install) cmd_install "$2" "$3" ;;
 init) cmd_init "$2" ;;
 activate) cmd_activate ;;
 rollback) cmd_rollback ;;
 status) cmd_status ;;
+verify) cmd_verify ;;
 esac
