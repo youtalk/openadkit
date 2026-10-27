@@ -103,4 +103,12 @@ while IFS=$'\t' read -r cpath _; do
 done <<< "$chmod_pairs"
 
 
+# --- the OTA hook and its boot check ship in the image ---------------------
+grep -A1 -F "source_path: ../scripts/x5h-ota.sh" "$aib" | grep -qF "path: /usr/sbin/x5h-ota" || fail ota_hook_not_installed
+grep -A1 -F "source_path: ../config/x5h-ota-verify.service" "$aib" \
+    | grep -qF "path: /etc/systemd/system/x5h-ota-verify.service" || fail ota_unit_not_installed
+grep -qx 'enable x5h-ota-verify.service' "$here/../config/80-x5h.preset" || fail ota_unit_not_enabled
+grep -qxF 'Requires=dev-disk-by\x2dpath-platform\x2dc0a80000.ufs\x2dscsi\x2d0:0:0:0.device' \
+    "$here/../config/x5h-ota-verify.service" || fail ota_unit_runs_without_ufs0
+
 echo "TEST_PASS $name"

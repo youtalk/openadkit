@@ -254,6 +254,12 @@ content:
       path: /usr/sbin/x5h-score-camera
     - source_path: ../scripts/x5h-score-vp.sh
       path: /usr/sbin/x5h-score-vp
+    # OTA update hook and its boot check (see ota.md). The unit runs
+    # `x5h-ota verify` at a demo boot while a result is pending.
+    - source_path: ../scripts/x5h-ota.sh
+      path: /usr/sbin/x5h-ota
+    - source_path: ../config/x5h-ota-verify.service
+      path: /etc/systemd/system/x5h-ota-verify.service
     # Gate D5's instrument (see README.md, "CES 2027 demo role"): its default
     # log source is the x5h-vp journal stream, so it only runs on the board and
     # has to ship in the image rather than be hand-copied on. The soak gate
@@ -533,6 +539,8 @@ content:
     - path: /usr/sbin/x5h-score-camera
       mode: "0755"
     - path: /usr/sbin/x5h-score-vp
+      mode: "0755"
+    - path: /usr/sbin/x5h-ota
       mode: "0755"
 
 auth:
