@@ -421,6 +421,7 @@ exception called out below the table.
 | `write-boot` | **yes** | replaces the contents of `x5h-boot` with the kernel, all three dtbs (the derived one is built here by `make-demo-dtb.sh`, so the staging host needs `dtc`), `x5h-env.txt` and `x5h-role.txt=dev` |
 | `stage-payload` | **yes** | mirrors `<inputs>/npu/` onto `npu-work` with `rsync --delete` |
 | `stage-stack` | no | container images and the scenario map, via the existing scripts |
+| `check-stack` | no | the three local images of the demo role (VisionPilot, the camera image, the bridge) are on the board. The camera image is built on the board, see `components/demo/image-republish-x5h.containerfile` |
 | `print-uboot` | no | prints the console lines that import the environment |
 
 **Every destructive subcommand requires `--yes`, `write-boot` and
