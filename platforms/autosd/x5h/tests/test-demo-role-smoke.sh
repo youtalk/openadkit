@@ -18,36 +18,40 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 write_big_dmesg() {
     {
         echo '#!/bin/sh'
-        echo 'echo "[1.0] assigned reserved memory node linux,npu_region@8e400000"'
+        echo 'echo "[1.0] assigned reserved memory node linux,npu_region@5da00000"'
         echo 'i=0; while [ $i -lt 5000 ]; do echo "[1.$i] filler line padding dmesg well past a pipe buffer"; i=$((i+1)); done'
     } > "$tmp/g/dmesg"
     chmod +x "$tmp/g/dmesg"
 }
 good() {
-    rm -rf "$tmp/g"; mkdir -p "$tmp/g/dt/reserved-memory/cr52_ram1@5da00000" "$tmp/g/dt/soc/cr52_1" "$tmp/g/uio/uio2" "$tmp/g/rproc"
-    for r in 1400000000 1c00000000 64000000 8e400000; do mkdir -p "$tmp/g/dt/reserved-memory/linux,npu_region@$r"; done
-    printf '\0\0\1\n' > "$tmp/g/dt/reserved-memory/cr52_ram1@5da00000/phandle"   # 0x0000010a
+    rm -rf "$tmp/g"; mkdir -p "$tmp/g/dt/reserved-memory/cr52_ram1@96650000" "$tmp/g/dt/soc/cr52_1" "$tmp/g/uio/uio2" "$tmp/g/rproc"
+    for r in 5da00000 9e600000 1400000000 1c00000000; do mkdir -p "$tmp/g/dt/reserved-memory/linux,npu_region@$r"; done
+    printf '\0\0\1\n' > "$tmp/g/dt/reserved-memory/cr52_ram1@96650000/phandle"   # 0x0000010a
     # The three vdev carveouts. Their phandles are derived by make-demo-dtb.sh
     # from the vendor tree's highest, so the fixture uses values well away from
-    # 0x10a (0x205 0x206 0x207, what the real tree yields today) and the script
-    # must judge them by their linkage, not by any constant.
-    for v in vdev0vring0@5dc00000:'\005' vdev0vring1@5dc03000:'\006' vdev0buffer@5dc10000:'\007'; do
+    # 0x10a (0x205 0x206 0x207, what the cacr tree yields) and the script must
+    # judge them by their linkage, not by any constant.
+    for v in vdev0vring0@96400000:'\005' vdev0vring1@96403000:'\006' vdev0buffer@96410000:'\007'; do
         mkdir -p "$tmp/g/dt/reserved-memory/${v%:*}"
         printf '\0\0\2%b' "${v#*:}" > "$tmp/g/dt/reserved-memory/${v%:*}/phandle"
     done
     printf '\0\0\1\n\0\0\2\005\0\0\2\006\0\0\2\007' > "$tmp/g/dt/soc/cr52_1/memory-region"
     echo 'root=x x5h.role=demo' > "$tmp/g/cmdline"
-    # The REAL /proc/iomem from board 2 after the fix, 2026-09-18, not an
-    # invented one. The kernel coalesces the three contiguous windows into a
-    # single reserved line, which is exactly what broke the first version of
-    # this gate, so the fixture has to carry that shape.
+    # The cacr layout as the kernel prints it: no-map nodes as top-level
+    # reserved lines, adjacent ones coalesced. The two vrings share one line,
+    # and cr52_ram1 sits inside the single line for the four stock CR52 nodes,
+    # which is the shape that broke the first, exact-match version of this
+    # gate on 2026-09-18.
     cat > "$tmp/g/iomem" <<'IOMEM'
-40000000-5d9fffff : System RAM
-  40000000-5d9fffff : reserved
-5da00000-5dc05fff : reserved
-5dc06000-5dc0ffff : System RAM
-5dc10000-5dd0ffff : reserved
-5dd10000-8affffff : System RAM
+40000000-6b7fffff : System RAM
+6b800000-8e2fffff : reserved
+8e300000-963fffff : System RAM
+96400000-96405fff : reserved
+96406000-9640ffff : System RAM
+96410000-9650ffff : reserved
+96510000-965fffff : System RAM
+96600000-9e5fffff : reserved
+9e600000-bfffffff : System RAM
 IOMEM
     echo offline > "$tmp/g/rproc/state"
     write_big_dmesg
@@ -58,7 +62,7 @@ run() { CMDLINE_FILE="$tmp/g/cmdline" IOMEM_FILE="$tmp/g/iomem" DT_ROOT="$tmp/g/
 for role in demo dev; do
     good; echo "root=x x5h.role=$role" > "$tmp/g/cmdline"
     out=$(run) || fail "good_tree_rejected_$role"
-    grep -q "^DEMO_ROLE_PASS role=$role carveout=0x5da00000 vdev=0x5dc00000 remoteproc=offline$" <<<"$out" || fail "no_pass_marker_$role"
+    grep -q "^DEMO_ROLE_PASS role=$role carveout=0x96650000 vdev=0x96400000 remoteproc=offline$" <<<"$out" || fail "no_pass_marker_$role"
 done
 # Each vdev carveout, missing three ways. These are the checks gate D1a did not
 # have on 2026-09-17, when it passed a tree whose vrings remoteproc then
@@ -73,20 +77,20 @@ while read -r vn vb vsize; do
     # The node and its linkage are right but the kernel never reserved the
     # window, so remoteproc still allocates it from linux,cma@40000000. The
     # fixture splits its reservation around this one window, leaving every
-    # earlier window covered, because a fixture that drops all reserved lines
+    # other window covered, because a fixture that drops all reserved lines
     # stops at carveout_not_reserved and never reaches this check.
     good
-    { printf '%s-%x : reserved\n' 5da00000 $((0x$vb - 1))
-      printf '%x-%s : reserved\n' $((0x$vb + 0x$vsize)) 8affffff; } > "$tmp/g/iomem"
+    { printf '%s-%x : reserved\n' 8e600000 $((0x$vb - 1))
+      printf '%x-%s : reserved\n' $((0x$vb + 0x$vsize)) 9e5fffff; } > "$tmp/g/iomem"
     out=$(run) && fail "unreserved_${vn}_accepted"
     grep -q "reason=${vn}_not_reserved" <<<"$out" || fail "${vn}_reservation_reason"
 done <<'EOF'
-vdev0vring0 5dc00000 3000
-vdev0vring1 5dc03000 3000
-vdev0buffer 5dc10000 100000
+vdev0vring0 96400000 3000
+vdev0vring1 96403000 3000
+vdev0buffer 96410000 100000
 EOF
-# A tree carrying only cr52_ram1 -- exactly the 2026-09-17 tree -- is refused.
-good; for vn in vdev0vring0@5dc00000 vdev0vring1@5dc03000 vdev0buffer@5dc10000; do rm -r "$tmp/g/dt/reserved-memory/$vn"; done
+# A tree carrying only cr52_ram1 -- the vendor cacr tree as shipped -- is refused.
+good; for vn in vdev0vring0@96400000 vdev0vring1@96403000 vdev0buffer@96410000; do rm -r "$tmp/g/dt/reserved-memory/$vn"; done
 printf '\0\0\1\n' > "$tmp/g/dt/soc/cr52_1/memory-region"
 out=$(run) && fail pre_fix_tree_accepted
 # yocto, the two retired roles, and no role word at all are all refused.
@@ -96,11 +100,11 @@ for bad in yocto cr52 npu; do
 done
 good; echo 'root=x quiet' > "$tmp/g/cmdline"; out=$(run) && fail unset_accepted
 grep -q 'reason=wrong_role role=unset' <<<"$out" || fail unset_reason
-good; echo '40000000-8affffff : System RAM' > "$tmp/g/iomem"; out=$(run) && fail missing_reservation_accepted
+good; echo '40000000-bfffffff : System RAM' > "$tmp/g/iomem"; out=$(run) && fail missing_reservation_accepted
 grep -q 'reason=carveout_not_reserved' <<<"$out" || fail reservation_reason
-good; printf '\0\0\1\v' > "$tmp/g/dt/reserved-memory/cr52_ram1@5da00000/phandle"; out=$(run) && fail wrong_phandle_accepted
+good; printf '\0\0\1\v' > "$tmp/g/dt/reserved-memory/cr52_ram1@96650000/phandle"; out=$(run) && fail wrong_phandle_accepted
 grep -q 'reason=carveout_phandle' <<<"$out" || fail phandle_reason
-good; rm -r "$tmp/g/dt/reserved-memory/cr52_ram1@5da00000"; out=$(run) && fail missing_carveout_node_accepted
+good; rm -r "$tmp/g/dt/reserved-memory/cr52_ram1@96650000"; out=$(run) && fail missing_carveout_node_accepted
 grep -q 'reason=carveout_node_missing' <<<"$out" || fail carveout_node_reason
 good; rm -r "$tmp/g/dt/soc/cr52_1"; out=$(run) && fail missing_memory_region_accepted
 grep -q 'reason=cr52_memory_region' <<<"$out" || fail memory_region_missing_reason
@@ -108,7 +112,7 @@ good; printf '\0\0\1\v' > "$tmp/g/dt/soc/cr52_1/memory-region"; out=$(run) && fa
 grep -q 'reason=cr52_memory_region' <<<"$out" || fail memory_region_wrong_reason
 good; mkdir -p "$tmp/g/dt/soc/cr52_1a"; printf '\0\0\1\n' > "$tmp/g/dt/soc/cr52_1a/memory-region"; out=$(run) && fail ambiguous_node_accepted
 grep -q 'reason=cr52_node_ambiguous' <<<"$out" || fail ambiguous_node_reason
-for r in 1400000000 1c00000000 64000000 8e400000; do
+for r in 5da00000 9e600000 1400000000 1c00000000; do
     good; rm -r "$tmp/g/dt/reserved-memory/linux,npu_region@$r"; out=$(run) && fail missing_npu_region_accepted
     grep -q "reason=npu_region_${r}_missing" <<<"$out" || fail npu_region_reason
 done

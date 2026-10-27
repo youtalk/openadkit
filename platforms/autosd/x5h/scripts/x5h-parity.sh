@@ -81,7 +81,7 @@ y2=$(read_has_yocto "$v2") || { echo "BOARD_PARITY_FAIL reason=bad_vars file=$v2
 #                         developers, which the access model forbids.
 # The character before each closing quote is a literal TAB (the manifest's
 # key/value separator); a run of spaces there breaks the match invisibly.
-allow='^(boot\.x5h-env\.txt|boot\.x5h-role\.txt|file\./etc/x5h/board\.conf|file\./etc/hostname|hostname|file\./etc/ssh/ssh_host_.*|file\./etc/ssh/authorized_keys\.d/.*)	'
+allow='^(size\.[^	]*|boot\.x5h-env\.txt|boot\.x5h-role\.txt|file\./etc/x5h/board\.conf|file\./etc/hostname|hostname|file\./etc/ssh/ssh_host_.*|file\./etc/ssh/authorized_keys\.d/.*)	'
 # fs.yocto-* is exempt ONLY when the two boards disagree about HAS_YOCTO, i.e.
 # when one board is expected to carry a populated Yocto filesystem and the other
 # is not. When both boards set HAS_YOCTO=1 (or both 0) a divergence in those

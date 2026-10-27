@@ -22,26 +22,15 @@
 # sit between the continued lines of one command, so each is introduced by
 # the option it explains.
 #
-# -v .../arc_prog_npus:/npu/hostapp/binary/arc_prog_npus:ro
-# The ARC programs the NPU driver loads to power the engine on. /opt/npu ships
-# one set at hostapp/binary/arc_prog_npus, and it is NOT the set this image's
-# Renesas runtime was built against: all twelve l1c*.bin differ by content.
-# With the wrong set the driver never reaches "Set programs and power on",
-# every inference returns RenesasBackendExecute failed, and VisionPilot dies
-# in its own offload gate with no mention of ARC programs at all. The matching
-# set is the one inside the vendor ORT rootfs, which is why npu-check-autosd.sh
-# passes on the same board, same artifacts and same devices while this failed.
-# Board-confirmed on board 2, 2026-09-18: with this line VisionPilot reaches
-# 12.9 ms NPU latency and 43 fps; without it, it restart-loops.
-#
 # -v /opt/npu/perf/merged:/home/youtalk/src/openadkit/x5h-work/npu/merged:ro
 # The NNX artifacts were compiled on a workstation and manifest.json records
 # the absolute path they were written to, which exists on no board. The
 # Renesas backend opens that exact path and dies with "fopen: No such file or
 # directory" followed by an Ort::Exception. Mapping the board's copy onto the
 # recorded path makes it resolve without editing vendor artifacts. Board-
-# confirmed on BOTH boards 2026-09-18. If the artifacts are ever recompiled,
-# check manifest.json and move this line with them.
+# confirmed on BOTH boards 2026-09-18. The EP v2.0.1 set (2026-10-15) was
+# compiled under the same directory. If the artifacts are ever recompiled
+# elsewhere, check manifest.json and move this line with them.
 #
 # -e LD_LIBRARY_PATH=...
 # The image's own LD_LIBRARY_PATH is
@@ -65,7 +54,6 @@ exec /usr/bin/systemd-cat -t x5h-vp /usr/bin/podman run --rm --replace --name x5
     --device /dev/cmem0 --device /dev/cmem_other0 --device /dev/cmem_other1 \
     --device /dev/cmem_other2 --device /dev/cmem_other3 \
     -v /opt/npu:/npu \
-    -v /opt/npu/ort-rootfs/usr/local/lib/python3.11/site-packages/onnxruntime/nnac_portable_env/binary/arc_prog_npus:/npu/hostapp/binary/arc_prog_npus:ro \
     -v /opt/npu/perf/merged:/home/youtalk/src/openadkit/x5h-work/npu/merged:ro \
     -v /etc/containers/systemd/vision_pilot.conf:/usr/share/visionpilot/config/vision_pilot.conf:ro,z \
     -v /etc/containers/systemd/vision_pilot_ros2.conf:/usr/share/visionpilot/config/vision_pilot_ros2.conf:ro,z \
