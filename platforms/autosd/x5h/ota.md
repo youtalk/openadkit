@@ -133,6 +133,8 @@ If `cr52` is staged, or `score-lm.service` is not active, `activate` prints `X5H
 
 `x5h-ota-verify.service` runs at the next boot and judges the update. The unit runs only if `pending` exists and the kernel command line has `x5h.role=demo`. In another role, `pending` stays until the next demo boot, and all commands except `status` and `verify` fail with `verify_pending`.
 
+The unit also needs UFS0, the disk that holds the CR52 slot. On some boots, Linux fails to start the UFS0 link, and the kernel log shows `c0a80000.ufs: link startup failed`. The CR52 still runs the firmware in the slot, but Linux cannot see the slot. Then the unit does not run, the hook judges and restores nothing, and `status` keeps `verifying`. If `status` still shows `verifying` 5 minutes after the boot, reboot the board again. The next boot judges the update. In such a boot, an `activate` with `cr52` fails with `slot_not_found` and changes nothing. Reboot and try again.
+
 If the check fails, the hook restores the previous version of every pending component. Then the next step depends on the pending components:
 
 - If `cr52` is pending, or `score-lm.service` is not active, the hook prints `X5H_OTA_FAIL verify reason=verify_failed` and runs `systemctl reboot`. **The board reboots once more by itself.** The agent must expect this second reboot. Until the next boot judges the rollback, `status` shows `rolling_back`. After that boot, the state is `rolled_back` (the previous version passed) or `rollback_failed` (it failed too).

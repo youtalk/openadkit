@@ -4,6 +4,11 @@ ConditionKernelCommandLine=x5h.role=demo
 ConditionPathExists=/var/lib/x5h-ota/pending
 # x5h-demo-up.sh starts x5h-si-link and score-lm itself, so order after it.
 After=x5h-demo.service
+# The CR52 slot is on UFS0. On some boots Linux fails the UFS0 link startup.
+# Then the check cannot see the slot, so it does not run, and the next boot
+# judges the update.
+Requires=dev-disk-by\x2dpath-platform\x2dc0a80000.ufs\x2dscsi\x2d0:0:0:0.device
+After=dev-disk-by\x2dpath-platform\x2dc0a80000.ufs\x2dscsi\x2d0:0:0:0.device
 
 [Service]
 Type=oneshot
