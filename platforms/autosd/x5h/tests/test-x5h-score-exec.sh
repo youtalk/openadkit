@@ -45,6 +45,12 @@ for c in vision_pilot.conf vision_pilot.capture.conf; do
     grep -qx 'engine.artifacts_dir *= /npu/perf/merged/v7c64carla_frozen_s3cal_v201_artifacts' "$conf" || fail "artifacts_dir_$c"
     grep -qx 'model.merged_path *= /npu/perf/merged/v7c64carla_frozen_s3cal_v201_artifacts/v7c64carla_frozen.onnx' "$conf" || fail "merged_path_$c"
 done
+# The DisplayPort backup: the KMS sink alone turns the HUD on, and only while
+# a monitor shows it. visualization_on composes the HUD on every frame, so it
+# stays off in the demo configuration.
+demo_conf="$here/../components/demo/vision_pilot.conf"
+grep -qx 'kms_display *= rcar-vcon' "$demo_conf" || fail demo_conf_kms_display
+grep -qx 'visualization_on *= false' "$demo_conf" || fail demo_conf_visualization_on
 # Run the board VisionPilot script with fake systemd-cat and podman.
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 mkdir -p "$tmp/bin" "$tmp/run"
