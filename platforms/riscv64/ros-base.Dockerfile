@@ -84,7 +84,8 @@ RUN placeholder-debs $(colcon list --names-only --base-paths /tmp/ros2/src | \
 # - PyPI has no riscv64 wheels for cryptography (needed by ansible) and some
 #   other packages. The RISE Project index has them. Prefer an older wheel to
 #   building a newer sdist. clang-format and casadi still build from source,
-#   and the clang-format build needs ninja.
+#   and the clang-format build needs ninja. This goes in /etc/pip.conf, not
+#   in the environment, because the ansible roles run pip through sudo.
 # - colcon and make start one job per CPU by default. Under emulation on a
 #   many-core host, that uses more memory than the host has.
 ARG COLCON_WORKERS=16
@@ -93,11 +94,11 @@ ARG MAKE_LOAD=96
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ninja-build && \
     rm -rf /var/lib/apt/lists/* && \
+    printf '[global]\nextra-index-url = https://gitlab.com/api/v4/projects/56254198/packages/pypi/simple\nprefer-binary = true\n' \
+      > /etc/pip.conf && \
     mkdir -p /etc/colcon && \
     printf 'build:\n  parallel-workers: %s\n' "${COLCON_WORKERS}" > /etc/colcon/defaults.yaml
-ENV PIP_EXTRA_INDEX_URL=https://gitlab.com/api/v4/projects/56254198/packages/pypi/simple \
-    PIP_PREFER_BINARY=1 \
-    COLCON_DEFAULTS_FILE=/etc/colcon/defaults.yaml \
+ENV COLCON_DEFAULTS_FILE=/etc/colcon/defaults.yaml \
     MAKEFLAGS="-j${MAKE_JOBS} -l${MAKE_LOAD}" \
     CMAKE_BUILD_PARALLEL_LEVEL=64
 
