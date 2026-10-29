@@ -259,6 +259,7 @@ table inet x5h {
     # 69/111/2049 alone is not enough.
     iifname $BIF udp dport { 69, 111, 2049, 20048 } accept
     iifname $BIF tcp dport { 111, 2049, 20048 } accept
+    iifname $BIF udp dport 7650-7679 accept
     iifname $BIF icmp type echo-request accept
     iifname "tailscale0" icmp type echo-request accept
     udp dport 41641 accept
@@ -282,6 +283,8 @@ table inet x5h {
   }
 }
 ```
+
+DDS domain 1 uses UDP 7650 and 7651 for discovery and 7660 to 7679 for unicast. Without this rule, CARLA and the board never discover each other.
 
 ```sh
 sudo nft -c -f /etc/nftables.conf && sudo systemctl enable --now nftables
