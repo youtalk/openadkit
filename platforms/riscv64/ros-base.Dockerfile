@@ -23,6 +23,34 @@ COPY platforms/riscv64/ros2.repos /tmp/ros2.repos
 RUN mkdir -p /tmp/ros2/src && \
     vcs import --shallow --workers 16 --input /tmp/ros2.repos /tmp/ros2/src
 
+# placeholder-debs registers packages that are present in the image but were
+# not installed by apt as held, empty debs. rosdep and apt then treat them as
+# installed and never look for a riscv64 binary. The hold also makes the
+# Autoware ansible rmw role skip its apt install.
+COPY --chmod=755 <<'EOF' /usr/local/bin/placeholder-debs
+#!/bin/bash
+set -euo pipefail
+dir="$(mktemp -d)"
+cd "${dir}"
+for name in "$@"; do
+  mkdir -p "${name}/DEBIAN"
+  printf 'Package: %s\nVersion: 0.0.0+src\nArchitecture: all\nMaintainer: Open AD Kit\nDescription: present in the image, not installed by apt\n' \
+    "${name}" > "${name}/DEBIAN/control"
+  dpkg-deb --build "${name}" >/dev/null
+done
+dpkg -i ./*.deb >/dev/null
+apt-mark hold "$@" >/dev/null
+rm -rf "${dir}"
+EOF
+
+# Only packages.ros.org has these as debs. pip installed the modules that the
+# image builds use. The Autoware ros2_dev_tools role asks for all of them, and
+# it does not use bloom or vcs2l.
+RUN placeholder-debs \
+      python3-catkin-pkg-modules python3-rosdistro-modules python3-rospkg-modules \
+      python3-rosdep-modules python3-rosdep python3-colcon-common-extensions \
+      python3-colcon-mixin python3-vcstool ros-build-essential python3-bloom python3-vcs2l
+
 # Test dependencies are left out because the build below disables testing.
 RUN apt-get update && \
     rosdep update --rosdistro "${ROS_DISTRO}" && \
@@ -46,24 +74,9 @@ RUN --mount=type=cache,id=ros2-jazzy-riscv64-build,target=/tmp/ros2/build \
         done; exit 1; }; } && \
     rm -rf log /tmp/colcon.out
 
-# Register each package built above as an installed ros-jazzy-* deb, so rosdep
-# and apt treat it as present and never look for a riscv64 binary. The hold also
-# makes the Autoware ansible rmw role skip its apt install. The Autoware
-# ros2_dev_tools role also asks for the ros-dev-tools packages from
-# packages.ros.org. pip installed the ones that the image builds use, and the
-# others (bloom, vcs2l) are not used in image builds.
-RUN cd /tmp/ros2 && mkdir debs && cd debs && \
-    for name in ros-build-essential python3-bloom python3-colcon-common-extensions \
-        python3-colcon-mixin python3-rosdep python3-vcs2l \
-        $(colcon list --names-only --base-paths ../src | sed "s/_/-/g; s/^/ros-${ROS_DISTRO}-/"); do \
-      mkdir -p "${name}/DEBIAN" && \
-      printf 'Package: %s\nVersion: 0.0.0+src\nArchitecture: all\nMaintainer: Open AD Kit\nDescription: provided by the source build in /opt/ros/%s\n' \
-        "${name}" "${ROS_DISTRO}" > "${name}/DEBIAN/control" && \
-      dpkg-deb --build "${name}" >/dev/null && \
-      echo "${name}" >> ../held; \
-    done && \
-    dpkg -i ./*.deb >/dev/null && \
-    xargs apt-mark hold < ../held >/dev/null && \
+# Register each package built above as an installed ros-jazzy-* deb.
+RUN placeholder-debs $(colcon list --names-only --base-paths /tmp/ros2/src | \
+      sed "s/_/-/g; s/^/ros-${ROS_DISTRO}-/") && \
     rm -rf /tmp/ros2 /tmp/ros2.repos
 
 # The images built on top of this one need these riscv64 adjustments, which
