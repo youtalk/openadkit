@@ -1133,7 +1133,7 @@ After `fault lm`, no container process survives. `podman ps` still lists `x5h-vp
 - `VP_NPU_PASS frames=<n> wall_avg_ms=<ms> wall_max_ms=<ms>`: `vp-npu-gate.sh`, gate D5.
 - `SI_STOP_PASS`: `si_stop_gate.py` on the companion host (the `si-gate` compose service, gate D6). The CR52-authored stop was seen on domain 1 within the latency budget.
 - `X5H_CES_DEMO_READY sha=<sha> spawn=<idx> units=6 hb=<seq>`: `scripts/x5h-ces2027-demo.sh check`, on the companion host. Reads the package sha, the CARLA spawn index, and the heartbeat sequence together. It also needs `/run/score/vp.ready`, a running VisionPilot process, and `fault=0` in the heartbeat (the Safety Island is not latched). Otherwise it prints `X5H_CES_DEMO_FAIL reason=<slug>`.
-- `DEMO_ROLE_PASS role=demo carveout=0x96650000 vdev=0x96400000 remoteproc=<state>`: `demo-role-smoke.sh`, gate D1a. The board booted the `demo` role on the derived cacr tree, with all four carveouts `cr52_1` lists present under the names remoteproc looks them up by.
+- `DEMO_ROLE_PASS role=demo carveout=0x96650000 vdev=0x96400000 remoteproc=<state> dp=<status>`: `demo-role-smoke.sh`, gate D1a. The board booted the `demo` role on the derived cacr tree, with all four carveouts `cr52_1` lists present under the names remoteproc looks them up by. The kernel owns the display, and `dp=` is the status of `card0-DP-1` (see "DisplayPort backup display" below).
 
 ### The four CR52 carveouts
 
@@ -1151,6 +1151,32 @@ The three `vdev0*` names are load bearing. `rcar_gen5_rproc_prepare` registers e
 All four windows must sit inside the vendor CR52 MPU row `SHARE_CR_CA`, `0x8e600000` to `0x9e600000`, because the safety island firmware maps no other DRAM. The three new windows use the hole between `ldr@8e200000` and `cr52_ram0@96600000`, which the cacr tree leaves unreserved. `make-demo-dtb.sh` refuses a tree that reserves any part of them, a tree without `cr52_ram1@96650000` under phandle `0x10a`, and a tree that already has a `vdev0*` node.
 
 The firmware and the tree change in the same power cycle. Old firmware on this tree reads its resource table at `0x5da00000`, which is now NPU memory. New firmware on an older tree reads `0x96650000`, which that tree gives to the NPU. In both cases an NPU write can set `DRIVER_OK`, and the CR52 aborts on garbage.
+
+### DisplayPort backup display
+
+adas-dashboard is the main display of the demo. A monitor on the board's DisplayPort output DP0 (connector CN29) is the backup: if the monitor is connected when VisionPilot starts, VisionPilot's own HUD shows on it. No operator action is necessary.
+
+The kernel owns the display in the derived tree. `make-demo-dtb.sh` removes the vendor's three `generic-uio` display nodes and adds the public DP controllers and connectors from `uboot/demo-display.dtsi`. `rcar-vcon`, `dw-dp` and `tdp2004` then bind, `card0-DP-1` appears, and the frame buffer console shows on the monitor. Gate D1a reports the connector status as `dp=<connected|disconnected|unknown>`. A board with no monitor still passes.
+
+Two consequences follow:
+
+- The Renesas single-app demo does not run under `demo` or `dev`, and `/dev/dp0` to `/dev/dp2` do not exist. That demo drives the display from user space and needs the vendor NPU tree, booted by hand.
+- The NPU bring-up marker reads `NPU_READY uio=4 cmem=4`. The vendor tree numbers its display UIO devices `uio4` to `uio6`, after the NPU, so the NPU cores keep `uio2` and `uio3`. `x5h-score-vp.sh` passes these two numbers to VisionPilot. If they move, gate D1a fails with `npu_uio_moved`.
+
+The line `kms_display = rcar-vcon` in `components/demo/vision_pilot.conf` turns on VisionPilot's `KmsDisplay` sink. OTA `visionpilot` `v3` and later carry the sink, and older images ignore the key. The sink decides once, at VisionPilot's start, before the frame loop. The pipeline start takes about 0.5 s, so it never happens inside a frame that the launch manager times. If `card0-DP-1` is connected and enabled at that time, the sink opens its `kmssink` pipeline and VisionPilot composes the HUD for it. The HUD is scaled by a whole number, 2x (2048x1024) on a 3440x1440 monitor, because the CPU scaler's cost grows with the output pixels. The journal then shows `[KmsDisplay] <w>x<h> shown at ...` (`journalctl -t x5h-vp`). Otherwise the sink stays off until VisionPilot stops, and VisionPilot composes no HUD, so the frame time is the same as with no sink. After a pipeline error or a change of frame size, the sink also stays off. It never restarts the pipeline in a running system.
+
+Obey these rules at the booth and on the bench:
+
+- Connect the monitor before VisionPilot starts. If you connect it later, run the booth `reset`. VisionPilot then starts again and the HUD shows.
+- Turn off the monitor's automatic power save, and do not unplug the cable while the HUD shows. The HUD does not survive a power-save cycle or a re-plug. When the LG monitor wakes, it drops HPD and raises it again (a long HPD, the same signal as a re-plug). `KmsDisplay` holds DRM master while it shows the HUD, so the kernel console defers the hotplug, and nothing trains the link again. The monitor then shows No Signal until the board reboots. A booth `reset` does not help, because the console then restores the same mode, and that is not a modeset. This also applies to a monitor that is asleep when VisionPilot starts: it still reads `connected`, so the sink takes the display, and the wake loses it. On board 2 on 2026-09-29, the console came back from two wakes, and the HUD from none.
+- Never switch the display mode while the system runs. On this BSP kernel, the release of a mode that a client set panics the board through a NULL callback in `vsp1` (`lr` in `vsp1_du_pipeline_frame_end`). For this reason `KmsDisplay` never sets `force-modesetting`. It draws on a plane at the monitor's preferred mode.
+
+To give a running board the backup display:
+
+1. Write the boot partition with `stage-board.sh <board> <inputs> write-boot --yes`. OTA does not carry the device tree, so this step is the only way to get the new tree. `write-boot` also stages `x5h-role.txt=dev`, so run `x5h-role set demo` on the board after it.
+2. Copy `components/demo/vision_pilot.conf` to `/etc/containers/systemd/vision_pilot.conf` and `scripts/demo-role-smoke.sh` to `/usr/sbin/demo-role-smoke.sh` on the board. A root image built from this tree already has both.
+3. Install `visionpilot` `v3` or later with `x5h-ota install` and `x5h-ota activate`.
+4. Reboot, and run `demo-role-smoke.sh`. With the monitor connected, it prints `dp=connected`.
 
 ### Running the demo
 

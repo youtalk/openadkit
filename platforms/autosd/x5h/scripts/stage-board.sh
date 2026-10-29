@@ -29,6 +29,7 @@
 #   write-boot --yes replace x5h-boot contents (kernel, all three dtbs, env, role)
 #   stage-payload --yes  rsync inputs/npu -> npu-work (MIRROR: --delete)
 #   stage-stack      container images + scenario map (existing scripts)
+#   check-stack      the local images the demo role runs are on the board
 #   print-uboot      the exact console lines to import the environment
 # Destructive subcommands print their plan and stop unless --yes is given.
 #
@@ -125,10 +126,15 @@ check_inputs() {
     for f in Image-autosd extract-ikconfig r8a78000-ironhide-uio-autosd.dtb r8a78000-ironhide-npu-cacr.dtb \
              x5h-rootfs.ext4 rpmsg-eth rpmsg-ping score-x5h-aarch64.tar "$CR52_ELF" npu/cmemdrv.ko \
              npu/ort-2.0.1/infer npu/ort-2.0.1/lib/libonnxruntime.so.1 npu/ort-2.0.1/binary/arc_prog_npus/l1c0.bin \
-             npu/perf/merged/v7c64carla_frozen_s3cal_v201_artifacts/nnx/manifest.json; do
+             npu/perf/merged/v7c64carla_frozen_s3cal_v201_artifacts/nnx/manifest.json \
+             npu/v7c64carla-contract.json; do
         [ -e "$inputs/$f" ] || { echo "MISSING $inputs/$f"; missing=1; }
     done
     [ $missing -eq 0 ] || die "STAGE_CHECK_FAIL reason=missing_inputs"
+    # VisionPilot reads npu/v7c64carla-contract.json (model.contract in
+    # vision_pilot.conf). stage-payload mirrors with --delete, so an inputs
+    # set without it removes the board's copy, and VisionPilot then stops at
+    # start (board 1, 2026-10-27).
     # stage-payload MIRRORS npu/ onto the board. Anything here built for the
     # old memory map would land next to EP v2.0.1 on the cacr tree, where it
     # addresses memory that the tree gives to something else.
@@ -548,6 +554,27 @@ stage_stack() {
     mark "STAGE_STACK_PASS"
 }
 
+check_stack() {
+    # The demo role runs three local images that stage-stack cannot copy from
+    # a registry. VisionPilot and the bridge are loaded by hand, and the camera
+    # image is built ON the board from VisionPilot
+    # (components/demo/image-republish-x5h.containerfile). No unit fails at
+    # boot when one is missing: the camera process exits, the launch manager
+    # falls back, and VisionPilot stops before its ready line (board 1,
+    # 2026-10-27). The remote command exits 30 when an image is missing.
+    local bridge out rc=0
+    bridge=$(sed -n 's/^BRIDGE_IMAGE=//p' "$X5H/components/awf-oak-x5h.env")
+    [ -n "$bridge" ] || die "STAGE_STACKCHECK_FAIL reason=no_bridge_image_in_env"
+    out=$($SSH "m=0; for i in localhost/x5h-visionpilot:latest localhost/x5h-image-republish:latest $bridge; do podman image exists \$i || { echo \"missing \$i\"; m=1; }; done; [ \$m -eq 0 ] || exit 30" 2>&1) || rc=$?
+    relay "$out"
+    case "$rc" in
+        0)   mark "STAGE_STACKCHECK_PASS" ;;
+        30)  die "STAGE_STACKCHECK_FAIL reason=missing_image" ;;
+        255) die "STAGE_STACKCHECK_FAIL reason=board_unreachable rc=255" ;;
+        *)   die "STAGE_STACKCHECK_FAIL reason=probe_failed rc=$rc" ;;
+    esac
+}
+
 print_uboot() {
     cat <<EOF
 # On the U-Boot console of $board (deliver by typing these short lines; the env file itself is imported, never typed):
@@ -572,6 +599,7 @@ case "$cmd" in
     write-boot)     MARKER_PREFIX=STAGE_BOOT;    write_boot ;;
     stage-payload)  MARKER_PREFIX=STAGE_PAYLOAD; stage_payload ;;
     stage-stack)    MARKER_PREFIX=STAGE_STACK;   stage_stack ;;
+    check-stack)    MARKER_PREFIX=STAGE_STACKCHECK; check_stack ;;
     print-uboot)    MARKER_DONE=1;               print_uboot ;;
     *) die "STAGE_FAIL reason=unknown_subcommand cmd=$cmd" ;;
 esac

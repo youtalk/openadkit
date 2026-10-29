@@ -24,7 +24,7 @@ write_big_dmesg() {
     chmod +x "$tmp/g/dmesg"
 }
 good() {
-    rm -rf "$tmp/g"; mkdir -p "$tmp/g/dt/reserved-memory/cr52_ram1@96650000" "$tmp/g/dt/soc/cr52_1" "$tmp/g/uio/uio2" "$tmp/g/rproc"
+    rm -rf "$tmp/g"; mkdir -p "$tmp/g/dt/reserved-memory/cr52_ram1@96650000" "$tmp/g/dt/soc/cr52_1" "$tmp/g/uio/uio2" "$tmp/g/uio/uio3" "$tmp/g/rproc"
     for r in 5da00000 9e600000 1400000000 1c00000000; do mkdir -p "$tmp/g/dt/reserved-memory/linux,npu_region@$r"; done
     printf '\0\0\1\n' > "$tmp/g/dt/reserved-memory/cr52_ram1@96650000/phandle"   # 0x0000010a
     # The three vdev carveouts. Their phandles are derived by make-demo-dtb.sh
@@ -54,15 +54,22 @@ good() {
 9e600000-bfffffff : System RAM
 IOMEM
     echo offline > "$tmp/g/rproc/state"
+    # The two NPU cores, at the numbers x5h-score-vp.sh passes to VisionPilot.
+    echo npuc0 > "$tmp/g/uio/uio2/name"
+    echo npuc1 > "$tmp/g/uio/uio3/name"
+    # The kernel owns the display: the DP controller node is in the tree, the
+    # vendor UIO node is not, and rcar-vcon registered the DP connector.
+    mkdir -p "$tmp/g/dt/soc/dp@c5400000" "$tmp/g/drm/card0-DP-1"
+    echo connected > "$tmp/g/drm/card0-DP-1/status"
     write_big_dmesg
 }
-run() { CMDLINE_FILE="$tmp/g/cmdline" IOMEM_FILE="$tmp/g/iomem" DT_ROOT="$tmp/g/dt" UIO_DIR="$tmp/g/uio" RPROC_DIR="$tmp/g/rproc" DMESG_CMD="$tmp/g/dmesg" bash "$s"; }
+run() { CMDLINE_FILE="$tmp/g/cmdline" IOMEM_FILE="$tmp/g/iomem" DT_ROOT="$tmp/g/dt" UIO_DIR="$tmp/g/uio" RPROC_DIR="$tmp/g/rproc" DMESG_CMD="$tmp/g/dmesg" DRM_DIR="$tmp/g/drm" bash "$s"; }
 # Both AD Kit roles pass, and the marker reports which one was found rather
 # than asserting demo, so a dev boot cannot be read back as a demo boot.
 for role in demo dev; do
     good; echo "root=x x5h.role=$role" > "$tmp/g/cmdline"
     out=$(run) || fail "good_tree_rejected_$role"
-    grep -q "^DEMO_ROLE_PASS role=$role carveout=0x96650000 vdev=0x96400000 remoteproc=offline$" <<<"$out" || fail "no_pass_marker_$role"
+    grep -q "^DEMO_ROLE_PASS role=$role carveout=0x96650000 vdev=0x96400000 remoteproc=offline dp=connected$" <<<"$out" || fail "no_pass_marker_$role"
 done
 # Each vdev carveout, missing three ways. These are the checks gate D1a did not
 # have on 2026-09-17, when it passed a tree whose vrings remoteproc then
@@ -116,10 +123,28 @@ for r in 5da00000 9e600000 1400000000 1c00000000; do
     good; rm -r "$tmp/g/dt/reserved-memory/linux,npu_region@$r"; out=$(run) && fail missing_npu_region_accepted
     grep -q "reason=npu_region_${r}_missing" <<<"$out" || fail npu_region_reason
 done
-good; rmdir "$tmp/g/uio/uio2"; out=$(run) && fail missing_uio_accepted
+good; rm -r "$tmp/g/uio/uio2"; out=$(run) && fail missing_uio_accepted
 grep -q 'reason=uio2_missing' <<<"$out" || fail uio_reason
 good; printf '#!/bin/sh\necho "[1.0] nothing relevant"\n' > "$tmp/g/dmesg"; chmod +x "$tmp/g/dmesg"; out=$(run) && fail missing_cmem_probe_accepted
 grep -q 'reason=cmem_probe_missing' <<<"$out" || fail cmem_probe_reason
 good; rm "$tmp/g/rproc/state"; out=$(run) && fail missing_remoteproc_accepted
 grep -q 'reason=remoteproc_missing' <<<"$out" || fail remoteproc_reason
+# A board that boots with no monitor still passes gate D1a. The marker says so.
+good; echo disconnected > "$tmp/g/drm/card0-DP-1/status"; out=$(run) || fail no_monitor_rejected
+grep -q ' dp=disconnected$' <<<"$out" || fail no_monitor_marker
+# The vendor tree was staged by mistake: no DP node, the UIO node back.
+good; rmdir "$tmp/g/dt/soc/dp@c5400000"; out=$(run) && fail missing_dp_node_accepted
+grep -q 'reason=dp_node_missing' <<<"$out" || fail dp_node_reason
+good; mkdir -p "$tmp/g/dt/soc/display@1"; out=$(run) && fail uio_display_accepted
+grep -q 'reason=display_uio_present' <<<"$out" || fail uio_display_reason
+# The node is there, but no DRM connector came up: the driver did not bind.
+good; rm -r "$tmp/g/drm/card0-DP-1"; out=$(run) && fail missing_connector_accepted
+grep -q 'reason=dp_connector_missing' <<<"$out" || fail connector_reason
+# A display UIO device took an NPU core's number, so VisionPilot would get the
+# wrong device. The vendor tree numbers the display after the NPU (uio4 to
+# uio6), so removing it must leave uio2 and uio3 where they are.
+for u in uio2:dp0 uio3:dp1; do
+    good; echo "${u#*:}" > "$tmp/g/uio/${u%:*}/name"; out=$(run) && fail "moved_${u%:*}_accepted"
+    [ "$out" = "DEMO_ROLE_FAIL reason=npu_uio_moved" ] || fail "npu_uio_reason_${u%:*}"
+done
 echo "TEST_PASS $name"

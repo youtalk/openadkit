@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The AD Kit tree is the vendor cacr tree plus the three vdev carveouts cr52_1
 # needs, with its memory-region rewritten to list them after the vendor
-# cr52_ram1. This builds a small synthetic cacr-shaped tree, runs the
+# cr52_ram1, and with the display handed to the kernel. This builds a small synthetic cacr-shaped tree, runs the
 # derivation, and reads the result back with fdtget.
 set -u
 name=test-make-demo-dtb
@@ -15,6 +15,8 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 # The shape of the vendor cacr tree around the CR52: the stock cr52_ram0/1 at
 # 0x96600000, cr52_1 pointing at 0x10a, NPU regions on both sides of the hole
 # the vdev windows go into, and a 40-bit region to exercise the high cell.
+# Around the display: the nodes demo-display.dtsi borrows phandles from, and
+# the three generic-uio display nodes it replaces.
 cat > "$tmp/cacr.dts" <<'EOF'
 /dts-v1/;
 / {
@@ -51,11 +53,29 @@ cat > "$tmp/cacr.dts" <<'EOF'
 			phandle = <0x203>;
 		};
 	};
+	firmware {
+		scmi {
+			protocol@11 { phandle = <0xae>; };
+			protocol@14 { phandle = <0x4d>; };
+			protocol@16 { phandle = <0x4f>; };
+		};
+	};
 	soc {
 		cr52_1 {
 			compatible = "renesas,rcar-gen5-rproc";
 			memory-region = <0x10a>;
 		};
+		pinctrl@c0400000 {
+			dp0_hotplug { phandle = <0xf4>; };
+			dp1_hotplug { phandle = <0xf7>; };
+			dp2_hotplug { phandle = <0xfa>; };
+		};
+		vcon@c5020000 { ports { port@0 { endpoint { remote-endpoint = <0xeb>; phandle = <0xf5>; }; }; }; };
+		vcon@c5024000 { ports { port@0 { endpoint { remote-endpoint = <0xf0>; phandle = <0xf8>; }; }; }; };
+		vcon@c5028000 { ports { port@0 { endpoint { remote-endpoint = <0xf3>; phandle = <0xfb>; }; }; }; };
+		display@0 { compatible = "generic-uio"; };
+		display@1 { compatible = "generic-uio"; };
+		display@2 { compatible = "generic-uio"; };
 	};
 };
 EOF
@@ -125,4 +145,34 @@ refused "$tmp/demo.dts" double_derivation
 sed 's/^\t\tcr52_ram0@96600000 {/\t\tfw@96500000 { no-map; reg = <0x0 0x96500000 0x0 0x20000>; };\n&/' "$tmp/cacr.dts" > "$tmp/overlap.dts"
 grep -q 'fw@96500000' "$tmp/overlap.dts" || fail overlap_fixture_not_built
 refused "$tmp/overlap.dts" overlapping_reservation
+# The display: the three UIO nodes are gone, the public DP set is in, and each
+# VCON output and each connector links to its DP controller and back. The
+# links are what rcar-vcon walks to find an encoder, so a node that is present
+# but unlinked is the defect this checks for, not a cosmetic one.
+grep -q ' display=3$' <<<"$out" || fail no_display_marker
+soc=$(fdtget -l "$tmp/demo.dtb" /soc)
+for n in display@0 display@1 display@2; do grep -qx "$n" <<<"$soc" && fail "uio_left_$n"; done
+while read -r vcon dp con; do
+    [ "$(fdtget "$tmp/demo.dtb" "/soc/$dp" compatible)" = "renesas,r8a78000-dw-dp" ] || fail "compatible_$dp"
+    [ "$(fdtget -t x "$tmp/demo.dtb" "/soc/$vcon/ports/port@0/endpoint" remote-endpoint)" = \
+      "$(fdtget -t x "$tmp/demo.dtb" "/soc/$dp/ports/port@0/endpoint" phandle)" ] || fail "vcon_not_linked_$dp"
+    [ "$(fdtget -t x "$tmp/demo.dtb" "/soc/$dp/ports/port@1/endpoint" remote-endpoint)" = \
+      "$(fdtget -t x "$tmp/demo.dtb" "/$con/port/endpoint" phandle)" ] || fail "con_not_linked_$con"
+    [ "$(fdtget -t x "$tmp/demo.dtb" "/$con/port/endpoint" remote-endpoint)" = \
+      "$(fdtget -t x "$tmp/demo.dtb" "/soc/$dp/ports/port@1/endpoint" phandle)" ] || fail "con_not_linked_back_$con"
+done <<'EOF'
+vcon@c5020000 dp@c5400000 dp-con0
+vcon@c5024000 dp@c5500000 dp-con1
+vcon@c5028000 dp@c5600000 dp-con2
+EOF
+# The display step refuses four trees. Each would otherwise yield a tree that
+# boots with a silently mis-wired or duplicated display.
+sed '/display@1 /d' "$tmp/cacr.dts" > "$tmp/d1.dts"
+refused "$tmp/d1.dts" display_uio_missing
+sed 's/display@0 {/dp@c5400000 { };\n\t\tdisplay@0 {/' "$tmp/cacr.dts" > "$tmp/d2.dts"
+refused "$tmp/d2.dts" display_dp_present
+sed 's/phandle = <0x4d>/phandle = <0x4e>/' "$tmp/cacr.dts" > "$tmp/d3.dts"
+refused "$tmp/d3.dts" display_borrowed_phandle_moved
+sed 's/dp2_hotplug {/taken { phandle = <0x11b>; };\n\t\t\tdp2_hotplug {/' "$tmp/cacr.dts" > "$tmp/d4.dts"
+refused "$tmp/d4.dts" display_defined_phandle_taken
 echo "TEST_PASS $name"

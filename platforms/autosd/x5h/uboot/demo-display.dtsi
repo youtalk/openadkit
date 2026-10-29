@@ -1,0 +1,178 @@
+/*
+ * The DisplayPort nodes the demo tree hands back to the kernel.
+ *
+ * The vendor NPU tree drops the three dp@ controllers and the three dp-con
+ * connectors, and exposes the display as three generic-uio nodes for its
+ * user-space demo. rcar-vcon then finds no encoder (-22) and no DRM device
+ * appears. This block is the public set, verbatim as dtc decompiles
+ * r8a78000-ironhide.dtb from renesas-rcar/linux-bsp at the commit
+ * kernel/build-bsp-kernel.sh pins (ff9ce02daad0f5a4e64984d725f488faf3cf3e71,
+ * r8a78000.dtsi plus r8a78000-ironhide-common.dtsi). make-demo-dtb.sh appends
+ * it to the decompiled vendor tree; dtc merges a second root block into the
+ * first and applies the /delete-node/ lines.
+ *
+ * The phandles are numeric because the vendor blob carries no __symbols__.
+ * Each one this block uses but does not define must name the same node in
+ * the vendor tree. make-demo-dtb.sh checks every "expect" line below with
+ * fdtget against its input, and aborts on the first mismatch:
+ *
+ * expect /firmware/scmi/protocol@11 phandle ae
+ * expect /firmware/scmi/protocol@14 phandle 4d
+ * expect /firmware/scmi/protocol@16 phandle 4f
+ * expect /soc/pinctrl@c0400000/dp0_hotplug phandle f4
+ * expect /soc/pinctrl@c0400000/dp1_hotplug phandle f7
+ * expect /soc/pinctrl@c0400000/dp2_hotplug phandle fa
+ * expect /soc/vcon@c5020000/ports/port@0/endpoint phandle f5
+ * expect /soc/vcon@c5024000/ports/port@0/endpoint phandle f8
+ * expect /soc/vcon@c5028000/ports/port@0/endpoint phandle fb
+ * expect /soc/vcon@c5020000/ports/port@0/endpoint remote-endpoint eb
+ * expect /soc/vcon@c5024000/ports/port@0/endpoint remote-endpoint f0
+ * expect /soc/vcon@c5028000/ports/port@0/endpoint remote-endpoint f3
+ */
+/ {
+	soc {
+		/delete-node/ display@0;
+		/delete-node/ display@1;
+		/delete-node/ display@2;
+
+		dp@c5400000 {
+			compatible = "renesas,r8a78000-dw-dp";
+			reg = <0x00 0xc5400000 0x00 0x60000 0x00 0xc5460000 0x00 0x20000 0x00 0xc5480000 0x00 0x80000>;
+			reg-names = "io_base\0fw\0phy";
+			interrupts = <0x00 0x10d5 0x04>;
+			power-domains = <0xae 0x0b 0xae 0x08>;
+			clocks = <0x4d 0x17>;
+			resets = <0x4f 0x17>;
+			status = "okay";
+			pinctrl-0 = <0xf4>;
+			pinctrl-names = "default";
+
+			ports {
+				#address-cells = <0x01>;
+				#size-cells = <0x00>;
+
+				port@0 {
+					reg = <0x00>;
+
+					endpoint {
+						remote-endpoint = <0xf5>;
+						phandle = <0xeb>;
+					};
+				};
+
+				port@1 {
+					reg = <0x01>;
+
+					endpoint {
+						remote-endpoint = <0xf6>;
+						phandle = <0x11b>;
+					};
+				};
+			};
+		};
+		dp@c5500000 {
+			compatible = "renesas,r8a78000-dw-dp";
+			reg = <0x00 0xc5500000 0x00 0x60000 0x00 0xc5560000 0x00 0x20000 0x00 0xc5580000 0x00 0x80000>;
+			reg-names = "io_base\0fw\0phy";
+			interrupts = <0x00 0x10d6 0x04>;
+			power-domains = <0xae 0x0b 0xae 0x09>;
+			clocks = <0x4d 0x18>;
+			resets = <0x4f 0x18>;
+			status = "okay";
+			pinctrl-0 = <0xf7>;
+			pinctrl-names = "default";
+
+			ports {
+				#address-cells = <0x01>;
+				#size-cells = <0x00>;
+
+				port@0 {
+					reg = <0x00>;
+
+					endpoint {
+						remote-endpoint = <0xf8>;
+						phandle = <0xf0>;
+					};
+				};
+
+				port@1 {
+					reg = <0x01>;
+
+					endpoint {
+						remote-endpoint = <0xf9>;
+						phandle = <0x11c>;
+					};
+				};
+			};
+		};
+		dp@c5600000 {
+			compatible = "renesas,r8a78000-dw-dp";
+			reg = <0x00 0xc5600000 0x00 0x60000 0x00 0xc5660000 0x00 0x20000 0x00 0xc5680000 0x00 0x80000>;
+			reg-names = "io_base\0fw\0phy";
+			interrupts = <0x00 0x10d7 0x04>;
+			power-domains = <0xae 0x0b 0xae 0x0a>;
+			clocks = <0x4d 0x19>;
+			resets = <0x4f 0x19>;
+			status = "okay";
+			pinctrl-0 = <0xfa>;
+			pinctrl-names = "default";
+
+			ports {
+				#address-cells = <0x01>;
+				#size-cells = <0x00>;
+
+				port@0 {
+					reg = <0x00>;
+
+					endpoint {
+						remote-endpoint = <0xfb>;
+						phandle = <0xf3>;
+					};
+				};
+
+				port@1 {
+					reg = <0x01>;
+
+					endpoint {
+						remote-endpoint = <0xfc>;
+						phandle = <0x11d>;
+					};
+				};
+			};
+		};
+	};
+
+	dp-con0 {
+		compatible = "dp-connector";
+
+		port {
+
+			endpoint {
+				remote-endpoint = <0x11b>;
+				phandle = <0xf6>;
+			};
+		};
+	};
+	dp-con1 {
+		compatible = "dp-connector";
+
+		port {
+
+			endpoint {
+				remote-endpoint = <0x11c>;
+				phandle = <0xf9>;
+			};
+		};
+	};
+	dp-con2 {
+		compatible = "dp-connector";
+
+		port {
+
+			endpoint {
+				remote-endpoint = <0x11d>;
+				phandle = <0xfc>;
+			};
+		};
+	};
+};
