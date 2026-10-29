@@ -48,10 +48,13 @@ RUN --mount=type=cache,id=ros2-jazzy-riscv64-build,target=/tmp/ros2/build \
 
 # Register each package built above as an installed ros-jazzy-* deb, so rosdep
 # and apt treat it as present and never look for a riscv64 binary. The hold also
-# makes the Autoware ansible rmw role skip its apt install. python3-colcon-mixin
-# is in the same position: pip installed it, and Ubuntu has no riscv64 build.
+# makes the Autoware ansible rmw role skip its apt install. The Autoware
+# ros2_dev_tools role also asks for the ros-dev-tools packages from
+# packages.ros.org. pip installed the ones that the image builds use, and the
+# others (bloom, vcs2l) are not used in image builds.
 RUN cd /tmp/ros2 && mkdir debs && cd debs && \
-    for name in python3-colcon-mixin \
+    for name in ros-build-essential python3-bloom python3-colcon-common-extensions \
+        python3-colcon-mixin python3-rosdep python3-vcs2l \
         $(colcon list --names-only --base-paths ../src | sed "s/_/-/g; s/^/ros-${ROS_DISTRO}-/"); do \
       mkdir -p "${name}/DEBIAN" && \
       printf 'Package: %s\nVersion: 0.0.0+src\nArchitecture: all\nMaintainer: Open AD Kit\nDescription: provided by the source build in /opt/ros/%s\n' \
@@ -62,6 +65,28 @@ RUN cd /tmp/ros2 && mkdir debs && cd debs && \
     dpkg -i ./*.deb >/dev/null && \
     xargs apt-mark hold < ../held >/dev/null && \
     rm -rf /tmp/ros2 /tmp/ros2.repos
+
+# The images built on top of this one need these riscv64 adjustments, which
+# live here so that their Dockerfiles stay unchanged:
+# - PyPI has no riscv64 wheels for cryptography (needed by ansible) and some
+#   other packages. The RISE Project index has them. Prefer an older wheel to
+#   building a newer sdist. clang-format and casadi still build from source,
+#   and the clang-format build needs ninja.
+# - colcon and make start one job per CPU by default. Under emulation on a
+#   many-core host, that uses more memory than the host has.
+ARG COLCON_WORKERS=16
+ARG MAKE_JOBS=4
+ARG MAKE_LOAD=96
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ninja-build && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /etc/colcon && \
+    printf 'build:\n  parallel-workers: %s\n' "${COLCON_WORKERS}" > /etc/colcon/defaults.yaml
+ENV PIP_EXTRA_INDEX_URL=https://gitlab.com/api/v4/projects/56254198/packages/pypi/simple \
+    PIP_PREFER_BINARY=1 \
+    COLCON_DEFAULTS_FILE=/etc/colcon/defaults.yaml \
+    MAKEFLAGS="-j${MAKE_JOBS} -l${MAKE_LOAD}" \
+    CMAKE_BUILD_PARALLEL_LEVEL=64
 
 COPY --chmod=755 <<'EOF' /ros_entrypoint.sh
 #!/bin/bash
