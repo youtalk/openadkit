@@ -52,12 +52,18 @@ RUN placeholder-debs \
       python3-colcon-mixin python3-vcstool ros-build-essential python3-bloom python3-vcs2l
 
 # Test dependencies are left out because the build below disables testing.
+# The skipped keys are the packages that gen-ros2-repos.sh leaves out.
+# rosdep runs apt-get once per package, which takes about 45 minutes under
+# emulation, so collect the list and run apt-get once.
 RUN apt-get update && \
     rosdep update --rosdistro "${ROS_DISTRO}" && \
-    rosdep install -y --from-paths /tmp/ros2/src --ignore-src --rosdistro "${ROS_DISTRO}" \
+    pkgs="$(rosdep install --simulate -y --from-paths /tmp/ros2/src --ignore-src \
+      --rosdistro "${ROS_DISTRO}" \
+      --skip-keys "mimick_vendor rmw_connextdds rmw_connextdds_common rti_connext_dds_cmake_module" \
       --dependency-types=build --dependency-types=build_export \
       --dependency-types=buildtool --dependency-types=buildtool_export \
-      --dependency-types=exec && \
+      --dependency-types=exec | sed -n 's/.*apt-get install -y //p')" && \
+    apt-get install -y ${pkgs} && \
     rm -rf /var/lib/apt/lists/*
 
 # The build tree is a cache mount, so a failed build resumes where it stopped.
