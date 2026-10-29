@@ -78,12 +78,15 @@ RUN --mount=type=bind,source=platforms/riscv64/proxsuite.patch,target=/tmp/proxs
 # Some package.xml dependencies have a "$ROS_VERSION == 2" condition. Nothing
 # sets ROS_VERSION before ROS itself is built, so set it here, or colcon drops
 # those dependencies and builds packages in the wrong order.
+# magic_enum ignores BUILD_TESTING. Its tests fail with -Werror because GCC 13
+# reports a false -Warray-bounds in the fmt headers, so turn them off too.
 RUN --mount=type=cache,id=ros2-jazzy-riscv64-build,target=/tmp/ros2/build \
     cd /tmp/ros2 && \
     { ROS_VERSION=2 ROS_PYTHON_VERSION=3 MAKEFLAGS="-j8 -l128" colcon build \
         --merge-install --install-base "/opt/ros/${ROS_DISTRO}" \
         --parallel-workers 32 --continue-on-error \
         --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+          -DMAGIC_ENUM_OPT_BUILD_TESTS=OFF -DMAGIC_ENUM_OPT_BUILD_EXAMPLES=OFF \
         2>&1 | tee /tmp/colcon.out || \
       { for p in $(sed -n 's/^Failed *<<< \([^ ]*\).*/\1/p' /tmp/colcon.out); do \
           echo "===== ${p}"; tail -n 60 "log/latest_build/${p}/stdout_stderr.log"; \
