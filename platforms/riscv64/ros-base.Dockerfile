@@ -66,6 +66,11 @@ RUN apt-get update && \
     apt-get install -y ${pkgs} && \
     rm -rf /var/lib/apt/lists/*
 
+# proxsuite includes the x86 intrinsics header on every architecture except
+# aarch64 and ppc64. The patch limits it to x86.
+RUN --mount=type=bind,source=platforms/riscv64/proxsuite.patch,target=/tmp/proxsuite.patch \
+    git -C /tmp/ros2/src/proxsuite apply /tmp/proxsuite.patch
+
 # The build tree is a cache mount, so a failed build resumes where it stopped.
 # On failure, print the log tail of each package that failed.
 RUN --mount=type=cache,id=ros2-jazzy-riscv64-build,target=/tmp/ros2/build \
