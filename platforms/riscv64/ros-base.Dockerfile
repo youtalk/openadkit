@@ -72,7 +72,9 @@ RUN --mount=type=bind,source=platforms/riscv64/proxsuite.patch,target=/tmp/proxs
     git -C /tmp/ros2/src/proxsuite apply /tmp/proxsuite.patch
 
 # The build tree is a cache mount, so a failed build resumes where it stopped.
-# On failure, print the log tail of each package that failed.
+# --continue-on-error builds everything that does not depend on a failed
+# package, so one run shows every independent failure. On failure, print the
+# log tail of each package that failed.
 # Some package.xml dependencies have a "$ROS_VERSION == 2" condition. Nothing
 # sets ROS_VERSION before ROS itself is built, so set it here, or colcon drops
 # those dependencies and builds packages in the wrong order.
@@ -80,7 +82,7 @@ RUN --mount=type=cache,id=ros2-jazzy-riscv64-build,target=/tmp/ros2/build \
     cd /tmp/ros2 && \
     { ROS_VERSION=2 ROS_PYTHON_VERSION=3 MAKEFLAGS="-j8 -l128" colcon build \
         --merge-install --install-base "/opt/ros/${ROS_DISTRO}" \
-        --parallel-workers 32 \
+        --parallel-workers 32 --continue-on-error \
         --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
         2>&1 | tee /tmp/colcon.out || \
       { for p in $(sed -n 's/^Failed *<<< \([^ ]*\).*/\1/p' /tmp/colcon.out); do \
