@@ -112,6 +112,10 @@ RUN placeholder-debs $(colcon list --names-only --base-paths /tmp/ros2/src | \
 #   environment, because the ansible roles run pip through sudo.
 # - colcon and make start one job per CPU by default. Under emulation on a
 #   many-core host, that uses more memory than the host has.
+# - Autoware builds with -Werror. Some GCC warnings depend on the target:
+#   Eigen has no riscv64 vector code, so GCC sees element-wise copies and
+#   reports maybe-uninitialized where it does not on x86 and Arm. These
+#   warnings stay in the build log, but they do not stop the build.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ninja-build && \
     rm -rf /var/lib/apt/lists/* && \
@@ -126,7 +130,8 @@ RUN printf '[global]\nextra-index-url = https://gitlab.com/api/v4/projects/56254
     mkdir -p /etc/colcon && \
     printf 'build:\n  parallel-workers: %s\n' "${COLCON_WORKERS}" > /etc/colcon/defaults.yaml
 ENV COLCON_DEFAULTS_FILE=/etc/colcon/defaults.yaml \
-    MAKEFLAGS="-j${MAKE_JOBS} -l${MAKE_LOAD}"
+    MAKEFLAGS="-j${MAKE_JOBS} -l${MAKE_LOAD}" \
+    CXXFLAGS="-Wno-error=maybe-uninitialized -Wno-error=array-bounds"
 
 COPY --chmod=755 <<'EOF' /ros_entrypoint.sh
 #!/bin/bash
