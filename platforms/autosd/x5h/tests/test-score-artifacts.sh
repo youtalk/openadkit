@@ -15,6 +15,7 @@ s="$tmp/score"
 for f in bin/launch_manager bin/datarouter bin/vp_standin lib/libscore_vp.so \
          etc/demo/launch_manager_config.bin etc/gate/launch_manager_config.bin \
          etc/sil/launch_manager_config.bin etc/recording/launch_manager_config.bin \
+         etc/twin/launch_manager_config.bin twin/twin-score-vp.sh \
          etc/gate/logging.json; do
     [ -s "$s/$f" ] || fail "missing_$f"
 done

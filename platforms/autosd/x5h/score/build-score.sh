@@ -20,7 +20,7 @@ targets=(
     //vp:libscore_vp.so
     //vp:vp_standin
 )
-for c in demo gate sil recording; do
+for c in demo gate sil recording twin; do
     [ -f "config/$c/BUILD.bazel" ] && targets+=("//config/$c:lm_config")
 done
 "$BAZEL" build "${flags[@]}" "${targets[@]}"
@@ -31,7 +31,7 @@ install -D -m0755 "$bin/external/score_lifecycle+/score/launch_manager/src/daemo
 install -D -m0755 "$bin/external/score_logging+/score/datarouter/datarouter" "$s/bin/datarouter"
 install -D -m0755 "$bin/vp/vp_standin" "$s/bin/vp_standin"
 install -D -m0644 "$bin/vp/libscore_vp.so" "$s/lib/libscore_vp.so"
-for c in demo gate sil recording; do
+for c in demo gate sil recording twin; do
     f="$bin/config/$c/etc/launch_manager_config.bin"
     [ -f "$f" ] && install -D -m0644 "$f" "$s/etc/$c/launch_manager_config.bin"
 done
@@ -39,6 +39,11 @@ done
 if [ -d sil ]; then
     install -d "$s/sil"
     cp -a sil/. "$s/sil/"
+fi
+# The twin exec scripts. The twin VM installs them into /usr/local/sbin.
+if [ -d twin ]; then
+    install -d "$s/twin"
+    cp -a twin/. "$s/twin/"
 fi
 # Owned by root on the board, not by the build uid.
 tar --owner=0 --group=0 --numeric-owner -C "$stage" -cf "$OUT/score-x5h-$ARCH.tar" score
